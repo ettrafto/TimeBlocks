@@ -33,19 +33,27 @@ import {
 // Module-level map to track how many ScheduledItems render per ID
 const renderCountsPerFrame = new Map();
 let frameCheckScheduled = false;
+let isCurrentlyResizing = false; // Track if we're in a resize state
+
+function setResizingState(resizing) {
+  isCurrentlyResizing = resizing;
+}
 
 function trackScheduledItemRender(itemId) {
   renderCountsPerFrame.set(itemId, (renderCountsPerFrame.get(itemId) || 0) + 1);
   
   if (!frameCheckScheduled) {
     frameCheckScheduled = true;
-    queueMicrotask(() => {
-      // Check for duplicate renders
-      const duplicates = Array.from(renderCountsPerFrame.entries()).filter(([id, count]) => count > 1);
-      if (duplicates.length > 0) {
-        console.error('🚨 DUPLICATE DRAGGABLES DETECTED:', duplicates.map(([id, count]) => 
-          `ID ${id} rendered ${count} times in same frame`
-        ).join(', '));
+    requestAnimationFrame(() => {
+      // Only warn about duplicates during active resize (when it matters for dnd-kit)
+      // Multiple renders after resize cleanup are normal React behavior
+      if (isCurrentlyResizing) {
+        const duplicates = Array.from(renderCountsPerFrame.entries()).filter(([id, count]) => count > 1);
+        if (duplicates.length > 0) {
+          console.error('🚨 DUPLICATE DRAGGABLES DETECTED DURING RESIZE:', duplicates.map(([id, count]) => 
+            `ID ${id} rendered ${count} times - this can confuse dnd-kit`
+          ).join(', '));
+        }
       }
       renderCountsPerFrame.clear();
       frameCheckScheduled = false;
@@ -1178,38 +1186,37 @@ function App() {
       resizeDraftId: resizeDraft?.id,
       timestamp: new Date().toISOString().split('T')[1],
     });
+    // Update global resize state for duplicate detection
+    setResizingState(isResizing);
   }, [isResizing, resizeTarget, resizeDraft]);
 
   // MOVED TO DndEventMonitor COMPONENT (must be child of DndContext)
 
   // ========================================
-  // SENSORS - Two stable sets, toggle via prop (not conditional rendering)
+  // SENSORS - Memoized to prevent "useEffect dependency array changed size" warning
   // ========================================
-  // Create BOTH sensor sets unconditionally (hooks must be called every render)
-  const normalSensors = useSensors(
+  // Determine if we should use inert sensors
+  const useInert = isResizing || !!resizeDraft || !!resizeTarget;
+  
+  // Create sensor based on current state (always returns array of same structure)
+  // When inert: disable the sensor internally rather than changing array size
+  const sensors = useSensors(
     useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 8,
-      },
+      activationConstraint: useInert 
+        ? { distance: 999999 } // Effectively disabled (unreachable threshold)
+        : { distance: 8 },
     })
   );
   
-  // Empty sensor set = inert (no sensors registered)
-  const inertSensors = useSensors();
-  
-  // Determine which to use based on resize state
-  const useInert = isResizing || !!resizeDraft || !!resizeTarget;
-  const sensors = useInert ? inertSensors : normalSensors;
-  
   // Log sensor mode changes
   React.useEffect(() => {
-    console.log('🎛️ DndContext sensors:', useInert ? 'INERT (empty array)' : 'NORMAL (pointer active)', {
+    console.log('🎛️ DndContext sensors:', useInert ? 'INERT (disabled)' : 'NORMAL (active)', {
       isResizing,
       hasResizeTarget: !!resizeTarget,
       hasResizeDraft: !!resizeDraft,
-      sensorsLength: sensors.length,
+      activationDistance: useInert ? 999999 : 8,
     });
-  }, [useInert, isResizing, resizeTarget, resizeDraft, sensors]);
+  }, [useInert, isResizing, resizeTarget, resizeDraft]);
 
   // ========================================
   // ZOOM HANDLER
