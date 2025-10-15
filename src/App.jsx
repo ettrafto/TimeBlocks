@@ -12,12 +12,18 @@ import {
 // CONFIGURATION & CONSTANTS
 // ========================================
 
-// Task templates available for dragging
-const TASK_TEMPLATES = [
-  { id: 'workout', label: 'Workout', color: 'bg-blue-500', duration: 60 },
-  { id: 'meeting', label: 'Meeting', color: 'bg-purple-500', duration: 30 },
-  { id: 'lunch', label: 'Lunch', color: 'bg-green-500', duration: 45 },
-  { id: 'study', label: 'Study', color: 'bg-orange-500', duration: 90 },
+// Predefined color options for events
+const COLOR_OPTIONS = [
+  { name: 'Blue', value: 'bg-blue-500' },
+  { name: 'Purple', value: 'bg-purple-500' },
+  { name: 'Green', value: 'bg-green-500' },
+  { name: 'Orange', value: 'bg-orange-500' },
+  { name: 'Red', value: 'bg-red-500' },
+  { name: 'Yellow', value: 'bg-yellow-500' },
+  { name: 'Pink', value: 'bg-pink-500' },
+  { name: 'Indigo', value: 'bg-indigo-500' },
+  { name: 'Teal', value: 'bg-teal-500' },
+  { name: 'Cyan', value: 'bg-cyan-500' },
 ];
 
 // Calendar configuration
@@ -49,6 +55,26 @@ function minutesToPixels(minutes, pixelsPerSlot = DEFAULT_PIXELS_PER_SLOT) {
 // Snap minutes to nearest 15-minute increment
 function snapToIncrement(minutes) {
   return Math.round(minutes / MINUTES_PER_SLOT) * MINUTES_PER_SLOT;
+}
+
+// ========================================
+// OVERLAP DETECTION UTILITY
+// ========================================
+
+// Check if a new event overlaps with any existing events
+function checkOverlap(newEvent, existingEvents) {
+  const newStart = newEvent.startMinutes;
+  const newEnd = newEvent.startMinutes + (newEvent.duration || 30);
+  
+  const overlappingEvents = existingEvents.filter(existing => {
+    const existingStart = existing.startMinutes;
+    const existingEnd = existing.startMinutes + (existing.duration || 30);
+    
+    // Overlap condition: new.start < existing.end AND new.end > existing.start
+    return newStart < existingEnd && newEnd > existingStart;
+  });
+  
+  return overlappingEvents;
 }
 
 // Format minutes to time string (e.g., "9:30 AM")
@@ -83,17 +109,216 @@ function generateTimeSlots() {
 }
 
 // ========================================
+// COMPONENT: Modal (reusable confirmation dialog)
+// ========================================
+
+function Modal({ isOpen, title, children, onConfirm, onCancel }) {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      {/* Overlay */}
+      <div 
+        className="absolute inset-0 bg-black bg-opacity-50"
+        onClick={onCancel}
+      ></div>
+      
+      {/* Modal Content */}
+      <div className="relative bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4 z-10">
+        <h2 className="text-xl font-bold text-gray-800 mb-4">{title}</h2>
+        <div className="text-gray-600 mb-6">{children}</div>
+        
+        {/* Action Buttons */}
+        <div className="flex gap-3 justify-end">
+          <button
+            onClick={onCancel}
+            className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition-colors font-medium"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors font-medium"
+          >
+            Allow
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========================================
+// COMPONENT: EventEditorModal (create/edit event templates)
+// ========================================
+
+function EventEditorModal({ isOpen, editingEvent, onSave, onCancel }) {
+  const [name, setName] = React.useState('');
+  const [duration, setDuration] = React.useState(30);
+  const [color, setColor] = React.useState('bg-blue-500');
+  const [type, setType] = React.useState('');
+
+  // Populate form when editing
+  React.useEffect(() => {
+    if (editingEvent) {
+      setName(editingEvent.name || '');
+      setDuration(editingEvent.duration || 30);
+      setColor(editingEvent.color || 'bg-blue-500');
+      setType(editingEvent.type || '');
+    } else {
+      // Reset form for new event
+      setName('');
+      setDuration(30);
+      setColor('bg-blue-500');
+      setType('');
+    }
+  }, [editingEvent, isOpen]);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!name.trim()) {
+      alert('Please enter an event name');
+      return;
+    }
+    
+    onSave({
+      id: editingEvent?.id || `template-${Date.now()}`,
+      name: name.trim(),
+      duration,
+      color,
+      type,
+    });
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      {/* Overlay */}
+      <div 
+        className="absolute inset-0 bg-black bg-opacity-50"
+        onClick={onCancel}
+      ></div>
+      
+      {/* Modal Content */}
+      <div className="relative bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4 z-10">
+        <h2 className="text-xl font-bold text-gray-800 mb-4">
+          {editingEvent ? 'Edit Event' : 'Create New Event'}
+        </h2>
+        
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Name Input */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Event Name *
+            </label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="e.g., Team Meeting"
+              required
+            />
+          </div>
+
+          {/* Duration Input */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Duration (minutes) *
+            </label>
+            <select
+              value={duration}
+              onChange={(e) => setDuration(Number(e.target.value))}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value={15}>15 minutes</option>
+              <option value={30}>30 minutes</option>
+              <option value={45}>45 minutes</option>
+              <option value={60}>60 minutes</option>
+              <option value={75}>75 minutes</option>
+              <option value={90}>90 minutes</option>
+              <option value={105}>105 minutes</option>
+              <option value={120}>120 minutes</option>
+            </select>
+          </div>
+
+          {/* Color Picker */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Color *
+            </label>
+            <div className="grid grid-cols-5 gap-2">
+              {COLOR_OPTIONS.map((colorOption) => (
+                <button
+                  key={colorOption.value}
+                  type="button"
+                  onClick={() => setColor(colorOption.value)}
+                  className={`${colorOption.value} h-10 rounded border-2 transition-all ${
+                    color === colorOption.value
+                      ? 'border-gray-800 ring-2 ring-gray-400'
+                      : 'border-transparent hover:border-gray-400'
+                  }`}
+                  title={colorOption.name}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Type Input */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Type (optional)
+            </label>
+            <input
+              type="text"
+              value={type}
+              onChange={(e) => setType(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="e.g., Work, Personal, Exercise"
+            />
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex gap-3 justify-end pt-2">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition-colors font-medium"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors font-medium"
+            >
+              {editingEvent ? 'Save Changes' : 'Create Event'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ========================================
 // COMPONENT: TaskBlock (draggable task in left panel)
 // ========================================
 
-function TaskBlock({ task }) {
+function TaskBlock({ task, onClick }) {
   return (
     <div
-      className={`${task.color} text-white px-4 py-3 rounded-lg shadow-md cursor-grab active:cursor-grabbing hover:opacity-90 transition-opacity`}
+      onClick={onClick}
+      className={`${task.color} text-white px-4 py-3 rounded-lg shadow-md cursor-grab active:cursor-grabbing hover:opacity-90 transition-opacity relative group`}
     >
-      <div className="font-semibold">{task.label}</div>
+      <div className="font-semibold">{task.name || task.label}</div>
       {task.duration && (
         <div className="text-xs opacity-80 mt-1">{task.duration} minutes</div>
+      )}
+      {onClick && (
+        <div className="absolute top-1 right-1 text-xs opacity-0 group-hover:opacity-100 transition-opacity">
+          ✏️
+        </div>
       )}
     </div>
   );
@@ -103,7 +328,7 @@ function TaskBlock({ task }) {
 // COMPONENT: DraggableTaskBlock (wrapper with dnd-kit drag logic)
 // ========================================
 
-function DraggableTaskBlock({ task }) {
+function DraggableTaskBlock({ task, onEdit }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `template-${task.id}`,
     data: {
@@ -112,6 +337,14 @@ function DraggableTaskBlock({ task }) {
     },
   });
 
+  const handleClick = (e) => {
+    // Only trigger edit if clicking the block itself, not during drag
+    if (onEdit && !isDragging) {
+      e.stopPropagation();
+      onEdit(task);
+    }
+  };
+
   return (
     <div
       ref={setNodeRef}
@@ -119,7 +352,7 @@ function DraggableTaskBlock({ task }) {
       {...attributes}
       style={{ opacity: isDragging ? 0.5 : 1 }}
     >
-      <TaskBlock task={task} />
+      <TaskBlock task={task} onClick={handleClick} />
     </div>
   );
 }
@@ -372,6 +605,18 @@ function App() {
   
   // State: Zoom level (pixels per 15-minute slot)
   const [pixelsPerSlot, setPixelsPerSlot] = useState(DEFAULT_PIXELS_PER_SLOT);
+  
+  // State: Modal and overlap handling
+  const [showOverlapModal, setShowOverlapModal] = useState(false);
+  const [pendingEvent, setPendingEvent] = useState(null); // Event waiting for user confirmation
+  const [overlappingEvents, setOverlappingEvents] = useState([]); // Events that overlap with pending event
+
+  // State: Custom task templates (user-created event types)
+  const [taskTemplates, setTaskTemplates] = useState([]);
+  
+  // State: Event editor modal
+  const [showEventEditor, setShowEventEditor] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState(null);
 
   // Configure drag sensors
   const sensors = useSensors(
@@ -390,6 +635,90 @@ function App() {
   }, []);
 
   // ========================================
+  // EVENT TEMPLATE HANDLERS
+  // ========================================
+  
+  // Open modal to create new template
+  const handleCreateTemplate = () => {
+    setEditingTemplate(null);
+    setShowEventEditor(true);
+  };
+  
+  // Open modal to edit existing template
+  const handleEditTemplate = (template) => {
+    setEditingTemplate(template);
+    setShowEventEditor(true);
+  };
+  
+  // Save template (create or update)
+  const handleSaveTemplate = (templateData) => {
+    if (editingTemplate) {
+      // Update existing template
+      setTaskTemplates(prev => 
+        prev.map(t => t.id === templateData.id ? templateData : t)
+      );
+      console.log('✏️ Updated template:', templateData.name);
+    } else {
+      // Create new template
+      setTaskTemplates(prev => [...prev, templateData]);
+      console.log('➕ Created template:', templateData.name);
+    }
+    
+    setShowEventEditor(false);
+    setEditingTemplate(null);
+  };
+  
+  // Cancel template editing
+  const handleCancelTemplate = () => {
+    setShowEventEditor(false);
+    setEditingTemplate(null);
+  };
+
+  // ========================================
+  // OVERLAP MODAL HANDLERS
+  // ========================================
+  
+  // User confirms - add/update the pending event despite overlap
+  const handleConfirmOverlap = React.useCallback(() => {
+    if (pendingEvent) {
+      console.log('✅ User allowed overlap - processing event:', pendingEvent.label);
+      
+      // Check if this is a new event or a repositioned existing event
+      const isExistingEvent = scheduledItems.some(e => e.id === pendingEvent.id);
+      
+      if (isExistingEvent) {
+        // Repositioning existing event
+        setScheduledItems((prev) =>
+          prev.map((schedItem) =>
+            schedItem.id === pendingEvent.id
+              ? pendingEvent
+              : schedItem
+          )
+        );
+      } else {
+        // Adding new event
+        setScheduledItems((prev) => [...prev, pendingEvent]);
+        setNextId((prev) => prev + 1);
+      }
+    }
+    
+    // Close modal and clear pending state
+    setShowOverlapModal(false);
+    setPendingEvent(null);
+    setOverlappingEvents([]);
+  }, [pendingEvent, scheduledItems]);
+  
+  // User cancels - discard the pending event
+  const handleCancelOverlap = React.useCallback(() => {
+    console.log('❌ User canceled - discarding event:', pendingEvent?.label);
+    
+    // Close modal and clear pending state
+    setShowOverlapModal(false);
+    setPendingEvent(null);
+    setOverlappingEvents([]);
+  }, [pendingEvent]);
+
+  // ========================================
   // DRAG & DROP HANDLERS
   // ========================================
 
@@ -398,7 +727,7 @@ function App() {
     console.log('🚀 DRAG START:', {
       id: event.active.id,
       type: activeData?.type,
-      label: activeData?.task?.label || activeData?.item?.label,
+      label: activeData?.task?.name || activeData?.task?.label || activeData?.item?.label || activeData?.item?.name,
     });
     
     setActiveId(event.active.id);
@@ -473,7 +802,8 @@ function App() {
       
       // Create a task-like object from the scheduled item
       taskInfo = {
-        label: item.label,
+        name: item.label || item.name,
+        label: item.label || item.name,
         color: item.color,
         duration: item.duration || 30,
       };
@@ -540,17 +870,31 @@ function App() {
 
       const newItem = {
         id: `scheduled-${nextId}`,
-        label: task.label,
+        label: task.name || task.label, // Support both name and label
         color: task.color,
         startMinutes: finalMinutes,
         duration: duration,
       };
 
-      console.log(`✅ Placed "${task.label}" at ${formatTime(finalMinutes)} (${duration} min duration, height: ${minutesToPixels(duration, pixelsPerSlot)}px)`);
-
-      setScheduledItems((prev) => [...prev, newItem]);
-      setNextId((prev) => prev + 1);
-      setGhostPosition(null); // Clear ghost after successful drop
+      // ========================================
+      // CHECK FOR OVERLAPS
+      // ========================================
+      const overlaps = checkOverlap(newItem, scheduledItems);
+      
+      if (overlaps.length > 0) {
+        // Overlap detected - show modal for confirmation
+        console.log('⚠️ Overlap detected with:', overlaps.map(e => e.label).join(', '));
+        setPendingEvent(newItem);
+        setOverlappingEvents(overlaps);
+        setShowOverlapModal(true);
+        setGhostPosition(null);
+      } else {
+        // No overlap - add event directly
+        console.log(`✅ Placed "${task.name || task.label}" at ${formatTime(finalMinutes)} (${duration} min duration, height: ${minutesToPixels(duration, pixelsPerSlot)}px)`);
+        setScheduledItems((prev) => [...prev, newItem]);
+        setNextId((prev) => prev + 1);
+        setGhostPosition(null);
+      }
     } else if (activeData.type === 'scheduled') {
       // ========================================
       // DRAGGING WITHIN CALENDAR - REPOSITION EXISTING EVENT
@@ -568,24 +912,41 @@ function App() {
       
       console.log('🔄 Repositioning event:', item.label, 'from', formatTime(item.startMinutes), 'to', formatTime(finalMinutes));
 
-      console.log(`✅ Moved "${item.label}" to ${formatTime(finalMinutes)} (duration: ${item.duration || 30} min preserved)`);
-
-      setScheduledItems((prev) =>
-        prev.map((schedItem) =>
-          schedItem.id === item.id
-            ? { ...schedItem, startMinutes: finalMinutes } // Preserve all properties including duration
-            : schedItem
-        )
-      );
+      // Create updated event object
+      const updatedItem = { ...item, startMinutes: finalMinutes };
       
-      setGhostPosition(null); // Clear ghost after repositioning
+      // ========================================
+      // CHECK FOR OVERLAPS (excluding the event being moved)
+      // ========================================
+      const otherEvents = scheduledItems.filter(e => e.id !== item.id);
+      const overlaps = checkOverlap(updatedItem, otherEvents);
+      
+      if (overlaps.length > 0) {
+        // Overlap detected - show modal for confirmation
+        console.log('⚠️ Reposition would overlap with:', overlaps.map(e => e.label).join(', '));
+        setPendingEvent(updatedItem);
+        setOverlappingEvents(overlaps);
+        setShowOverlapModal(true);
+        setGhostPosition(null);
+      } else {
+        // No overlap - update position directly
+        console.log(`✅ Moved "${item.label}" to ${formatTime(finalMinutes)} (duration: ${item.duration || 30} min preserved)`);
+        setScheduledItems((prev) =>
+          prev.map((schedItem) =>
+            schedItem.id === item.id
+              ? { ...schedItem, startMinutes: finalMinutes }
+              : schedItem
+          )
+        );
+        setGhostPosition(null);
+      }
     }
   }
 
   // Get the active item for the drag overlay
   const activeItem = activeId
     ? activeId.startsWith('template-')
-      ? TASK_TEMPLATES.find((t) => `template-${t.id}` === activeId)
+      ? taskTemplates.find((t) => `template-${t.id}` === activeId)
       : scheduledItems.find((item) => item.id === activeId)
     : null;
 
@@ -599,24 +960,46 @@ function App() {
     >
       <div className="flex h-screen bg-gray-50">
         {/* ========================================
-            LEFT PANEL: Task Templates
+            LEFT PANEL: Custom Event Templates
         ======================================== */}
         <div className="w-1/3 bg-gray-100 p-6 border-r border-gray-300 overflow-y-auto">
-          <h2 className="text-2xl font-bold mb-6 text-gray-800">Task Blocks</h2>
-          <div className="space-y-4">
-            {TASK_TEMPLATES.map((task) => (
-              <DraggableTaskBlock key={task.id} task={task} />
-            ))}
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-2xl font-bold text-gray-800">Event Templates</h2>
+            <button
+              onClick={handleCreateTemplate}
+              className="bg-blue-600 text-white w-10 h-10 rounded-full flex items-center justify-center hover:bg-blue-700 transition-colors shadow-lg text-xl font-bold"
+              title="Create New Event Template"
+            >
+              +
+            </button>
           </div>
+          
+          {taskTemplates.length === 0 ? (
+            <div className="bg-white rounded-lg shadow p-6 text-center text-gray-500">
+              <p className="mb-4">No event templates yet!</p>
+              <p className="text-sm">Click the <strong className="text-blue-600">+</strong> button above to create your first event template.</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {taskTemplates.map((task) => (
+                <DraggableTaskBlock 
+                  key={task.id} 
+                  task={task} 
+                  onEdit={handleEditTemplate}
+                />
+              ))}
+            </div>
+          )}
           
           {/* Instructions */}
           <div className="mt-8 p-4 bg-white rounded-lg shadow text-sm text-gray-600">
-            <p className="font-semibold mb-2">Instructions:</p>
+            <p className="font-semibold mb-2">How to use:</p>
             <ul className="list-disc list-inside space-y-1">
-              <li>Drag tasks to the calendar</li>
-              <li>Snaps to 15-min increments</li>
-              <li>Rearrange within calendar</li>
-              <li>Tasks can be reused</li>
+              <li>Click <strong>+</strong> to create event templates</li>
+              <li>Drag templates to the calendar</li>
+              <li>Click a template to edit it</li>
+              <li>Events snap to 15-min slots</li>
+              <li>Ctrl+Scroll to zoom calendar</li>
             </ul>
           </div>
         </div>
@@ -654,14 +1037,55 @@ function App() {
                 activeId?.startsWith('template-')
                   ? activeItem
                   : {
-                      label: activeItem.label,
+                      name: activeItem.label || activeItem.name,
+                      label: activeItem.label || activeItem.name,
                       color: activeItem.color,
+                      duration: activeItem.duration,
                     }
               }
             />
           </div>
         ) : null}
       </DragOverlay>
+
+      {/* ========================================
+          OVERLAP CONFIRMATION MODAL
+      ======================================== */}
+      <Modal
+        isOpen={showOverlapModal}
+        title="⚠️ Time Conflict Detected"
+        onConfirm={handleConfirmOverlap}
+        onCancel={handleCancelOverlap}
+      >
+        <div className="space-y-3">
+          <p>
+            The event <strong className="text-gray-800">"{pendingEvent?.label}"</strong> overlaps with the following {overlappingEvents.length > 1 ? 'events' : 'event'}:
+          </p>
+          <ul className="list-disc list-inside space-y-1 bg-yellow-50 border border-yellow-200 rounded p-3">
+            {overlappingEvents.map((event) => {
+              const endTime = event.startMinutes + (event.duration || 30);
+              return (
+                <li key={event.id} className="text-sm">
+                  <strong>{event.label}</strong> ({formatTime(event.startMinutes)} - {formatTime(endTime)})
+                </li>
+              );
+            })}
+          </ul>
+          <p className="text-sm">
+            Do you want to schedule this event anyway?
+          </p>
+        </div>
+      </Modal>
+
+      {/* ========================================
+          EVENT TEMPLATE EDITOR MODAL
+      ======================================== */}
+      <EventEditorModal
+        isOpen={showEventEditor}
+        editingEvent={editingTemplate}
+        onSave={handleSaveTemplate}
+        onCancel={handleCancelTemplate}
+      />
     </DndContext>
   );
 }
