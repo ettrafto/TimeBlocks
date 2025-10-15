@@ -24,21 +24,26 @@ const TASK_TEMPLATES = [
 const START_HOUR = 8; // 8 AM
 const END_HOUR = 17; // 5 PM
 const MINUTES_PER_SLOT = 15;
-const PIXELS_PER_HOUR = 80; // Height in pixels for one hour
-const PIXELS_PER_MINUTE = PIXELS_PER_HOUR / 60;
+
+// Default zoom level
+const DEFAULT_PIXELS_PER_SLOT = 20; // 20px per 15-minute slot
+const MIN_PIXELS_PER_SLOT = 10; // Minimum zoom out
+const MAX_PIXELS_PER_SLOT = 80; // Maximum zoom in
 
 // ========================================
 // UTILITY FUNCTIONS
 // ========================================
 
-// Convert pixels to time (minutes from start)
-function pixelsToMinutes(pixels) {
-  return Math.round(pixels / PIXELS_PER_MINUTE);
+// Convert pixels to time (minutes from start) - using dynamic slot height
+function pixelsToMinutes(pixels, pixelsPerSlot = DEFAULT_PIXELS_PER_SLOT) {
+  const pixelsPerMinute = pixelsPerSlot / MINUTES_PER_SLOT;
+  return Math.round(pixels / pixelsPerMinute);
 }
 
-// Convert time (minutes from start) to pixels
-function minutesToPixels(minutes) {
-  return minutes * PIXELS_PER_MINUTE;
+// Convert time (minutes from start) to pixels - using dynamic slot height
+function minutesToPixels(minutes, pixelsPerSlot = DEFAULT_PIXELS_PER_SLOT) {
+  const pixelsPerMinute = pixelsPerSlot / MINUTES_PER_SLOT;
+  return minutes * pixelsPerMinute;
 }
 
 // Snap minutes to nearest 15-minute increment
@@ -126,7 +131,7 @@ import { useDraggable, useDroppable } from '@dnd-kit/core';
 // COMPONENT: ScheduledItem (task placed in calendar)
 // ========================================
 
-function ScheduledItem({ item }) {
+function ScheduledItem({ item, pixelsPerSlot }) {
   const { attributes, listeners, setNodeRef, isDragging, transform } = useDraggable({
     id: item.id,
     data: {
@@ -135,10 +140,10 @@ function ScheduledItem({ item }) {
     },
   });
 
-  // Calculate position and height based on duration
-  const topPosition = minutesToPixels(item.startMinutes);
+  // Calculate position and height based on duration - using dynamic slot height
+  const topPosition = minutesToPixels(item.startMinutes, pixelsPerSlot);
   const duration = item.duration || 30; // Default to 30 minutes if not specified
-  const height = minutesToPixels(duration);
+  const height = minutesToPixels(duration, pixelsPerSlot);
   
   // Apply transform for dragging
   const style = {
@@ -178,15 +183,15 @@ function ScheduledItem({ item }) {
 // COMPONENT: GhostEvent (preview of where event will be placed)
 // ========================================
 
-function GhostEvent({ ghostPosition }) {
+function GhostEvent({ ghostPosition, pixelsPerSlot }) {
   if (!ghostPosition) return null;
 
   const { startMinutes, task } = ghostPosition;
-  const topPosition = minutesToPixels(startMinutes);
+  const topPosition = minutesToPixels(startMinutes, pixelsPerSlot);
   
-  // Calculate height based on task duration
+  // Calculate height based on task duration - using dynamic slot height
   const duration = task.duration || 30; // Default 30 minutes
-  const height = minutesToPixels(duration);
+  const height = minutesToPixels(duration, pixelsPerSlot);
   
   // Calculate end time for preview
   const endMinutes = startMinutes + duration;
@@ -213,26 +218,113 @@ function GhostEvent({ ghostPosition }) {
 // COMPONENT: CalendarGrid (time slots + drop zone)
 // ========================================
 
-function CalendarGrid({ scheduledItems, ghostPosition }) {
+function CalendarGrid({ scheduledItems, ghostPosition, pixelsPerSlot, onZoom }) {
   const timeSlots = generateTimeSlots();
-  const calendarHeight = (END_HOUR - START_HOUR) * PIXELS_PER_HOUR;
+  const calendarHeight = (END_HOUR - START_HOUR) * 60 * (pixelsPerSlot / MINUTES_PER_SLOT);
+  
+  const containerRef = React.useRef(null);
+  const [isDragging, setIsDragging] = React.useState(false);
+  const [dragStart, setDragStart] = React.useState({ x: 0, y: 0, scrollTop: 0 });
 
   // Make the entire calendar a droppable zone
   const { setNodeRef } = useDroppable({
     id: 'calendar',
-
   });
+
+  // ========================================
+  // ZOOM FUNCTIONALITY (Mouse Wheel)
+  // ========================================
+  const handleWheel = React.useCallback((e) => {
+    // Check if scrolling vertically (normal scroll) or zooming (Ctrl+wheel or pinch)
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      
+      const zoomDelta = -e.deltaY * 0.1; // Sensitivity adjustment
+      const newPixelsPerSlot = Math.max(
+        MIN_PIXELS_PER_SLOT,
+        Math.min(MAX_PIXELS_PER_SLOT, pixelsPerSlot + zoomDelta)
+      );
+      
+      if (newPixelsPerSlot !== pixelsPerSlot) {
+        console.log('🔍 Zoom:', {
+          from: `${pixelsPerSlot.toFixed(1)}px/slot`,
+          to: `${newPixelsPerSlot.toFixed(1)}px/slot`,
+          percentage: `${((newPixelsPerSlot / DEFAULT_PIXELS_PER_SLOT) * 100).toFixed(0)}%`
+        });
+        onZoom(newPixelsPerSlot);
+      }
+    }
+  }, [pixelsPerSlot, onZoom]);
+
+  // ========================================
+  // DRAG-TO-SCROLL FUNCTIONALITY
+  // ========================================
+  const handleMouseDown = React.useCallback((e) => {
+    // Only initiate drag-to-scroll with middle mouse or when not on an event
+    if (e.button === 1 || (e.button === 0 && e.target === containerRef.current)) {
+      setIsDragging(true);
+      setDragStart({
+        x: e.clientX,
+        y: e.clientY,
+        scrollTop: containerRef.current?.parentElement?.scrollTop || 0,
+      });
+      e.preventDefault();
+    }
+  }, []);
+
+  const handleMouseMove = React.useCallback((e) => {
+    if (!isDragging || !containerRef.current?.parentElement) return;
+    
+    const deltaY = e.clientY - dragStart.y;
+    const newScrollTop = dragStart.scrollTop - deltaY;
+    
+    containerRef.current.parentElement.scrollTop = newScrollTop;
+    
+    console.log('📜 Scroll drag:', {
+      deltaY: deltaY.toFixed(0),
+      scrollTop: newScrollTop.toFixed(0),
+    });
+  }, [isDragging, dragStart]);
+
+  const handleMouseUp = React.useCallback(() => {
+    if (isDragging) {
+      setIsDragging(false);
+    }
+  }, [isDragging]);
+
+  // Add event listeners
+  React.useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    
+    if (isDragging) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    }
+
+    return () => {
+      container.removeEventListener('wheel', handleWheel);
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [handleWheel, handleMouseMove, handleMouseUp, isDragging]);
 
   return (
     <div 
-      ref={setNodeRef}
+      ref={(node) => {
+        setNodeRef(node);
+        containerRef.current = node;
+      }}
       data-droppable-id="calendar"
-      className="relative bg-white border-l border-gray-300"
+      className={`relative bg-white border-l border-gray-300 ${isDragging ? 'cursor-grabbing' : 'cursor-default'}`}
       style={{ height: `${calendarHeight}px` }}
+      onMouseDown={handleMouseDown}
     >
       {/* Time labels and grid lines */}
       {timeSlots.map((slot, index) => {
-        const topPosition = minutesToPixels(slot.minutes);
+        const topPosition = minutesToPixels(slot.minutes, pixelsPerSlot);
         const lineColor = slot.isHour 
           ? 'border-gray-400' 
           : slot.isHalfHour 
@@ -246,7 +338,7 @@ function CalendarGrid({ scheduledItems, ghostPosition }) {
             style={{ top: `${topPosition}px` }}
           >
             {slot.isHour && (
-              <div className="absolute left-2 -top-3 text-xs text-gray-600 font-medium">
+              <div className="absolute left-2 -top-3 text-xs text-gray-600 font-medium bg-white px-1">
                 {slot.time}
               </div>
             )}
@@ -256,11 +348,11 @@ function CalendarGrid({ scheduledItems, ghostPosition }) {
 
       {/* Scheduled items */}
       {scheduledItems.map((item) => (
-        <ScheduledItem key={item.id} item={item} />
+        <ScheduledItem key={item.id} item={item} pixelsPerSlot={pixelsPerSlot} />
       ))}
 
       {/* Ghost/shadow preview - shows where dragged item will land */}
-      <GhostEvent ghostPosition={ghostPosition} />
+      <GhostEvent ghostPosition={ghostPosition} pixelsPerSlot={pixelsPerSlot} />
     </div>
   );
 }
@@ -277,6 +369,9 @@ function App() {
   
   // State: Track ghost/shadow preview position while dragging over calendar
   const [ghostPosition, setGhostPosition] = useState(null); // { startMinutes: number, task: object }
+  
+  // State: Zoom level (pixels per 15-minute slot)
+  const [pixelsPerSlot, setPixelsPerSlot] = useState(DEFAULT_PIXELS_PER_SLOT);
 
   // Configure drag sensors
   const sensors = useSensors(
@@ -286,6 +381,13 @@ function App() {
       },
     })
   );
+
+  // ========================================
+  // ZOOM HANDLER
+  // ========================================
+  const handleZoom = React.useCallback((newPixelsPerSlot) => {
+    setPixelsPerSlot(newPixelsPerSlot);
+  }, []);
 
   // ========================================
   // DRAG & DROP HANDLERS
@@ -343,8 +445,8 @@ function App() {
       const currentMouseY = activatorEvent.clientY + delta.y;
       const offsetY = currentMouseY - rect.top;
       
-      // Convert to minutes and snap to 15-min increment
-      const minutes = pixelsToMinutes(offsetY);
+      // Convert to minutes and snap to 15-min increment - using dynamic slot height
+      const minutes = pixelsToMinutes(offsetY, pixelsPerSlot);
       const snappedMinutes = snapToIncrement(minutes);
       
       // Clamp to calendar bounds
@@ -359,10 +461,10 @@ function App() {
       // ========================================
       const item = activeData.item;
       
-      // Calculate new position based on drag delta
-      const currentPixels = minutesToPixels(item.startMinutes);
+      // Calculate new position based on drag delta - using dynamic slot height
+      const currentPixels = minutesToPixels(item.startMinutes, pixelsPerSlot);
       const newPixels = currentPixels + delta.y;
-      const newMinutes = pixelsToMinutes(newPixels);
+      const newMinutes = pixelsToMinutes(newPixels, pixelsPerSlot);
       const snappedMinutes = snapToIncrement(newMinutes);
       
       // Clamp to calendar bounds
@@ -388,13 +490,14 @@ function App() {
     
     // Debug logging with duration info
     const taskDuration = taskInfo.duration || 30;
-    const ghostHeight = minutesToPixels(taskDuration);
+    const ghostHeight = minutesToPixels(taskDuration, pixelsPerSlot);
     console.log('👻 Ghost preview:', {
       time: formatTime(finalMinutes),
       duration: `${taskDuration} min`,
       height: `${ghostHeight}px`,
-      position: `${minutesToPixels(finalMinutes)}px from top`,
+      position: `${minutesToPixels(finalMinutes, pixelsPerSlot)}px from top`,
       type: activeData.type,
+      zoom: `${pixelsPerSlot.toFixed(1)}px/slot`,
     });
   }
 
@@ -443,7 +546,7 @@ function App() {
         duration: duration,
       };
 
-      console.log(`✅ Placed "${task.label}" at ${formatTime(finalMinutes)} (${duration} min duration, height: ${minutesToPixels(duration)}px)`);
+      console.log(`✅ Placed "${task.label}" at ${formatTime(finalMinutes)} (${duration} min duration, height: ${minutesToPixels(duration, pixelsPerSlot)}px)`);
 
       setScheduledItems((prev) => [...prev, newItem]);
       setNextId((prev) => prev + 1);
@@ -523,10 +626,19 @@ function App() {
         ======================================== */}
         <div className="w-2/3 overflow-y-auto" id="calendar-container">
           <div className="p-6">
-            <h2 className="text-2xl font-bold mb-4 text-gray-800">
-              Daily Schedule ({START_HOUR}:00 AM - {END_HOUR > 12 ? END_HOUR - 12 : END_HOUR}:00 PM)
+            <h2 className="text-2xl font-bold mb-4 text-gray-800 flex items-center justify-between">
+              <span>Daily Schedule ({START_HOUR}:00 AM - {END_HOUR > 12 ? END_HOUR - 12 : END_HOUR}:00 PM)</span>
+              <span className="text-sm font-normal text-gray-600">
+                Zoom: {((pixelsPerSlot / DEFAULT_PIXELS_PER_SLOT) * 100).toFixed(0)}% 
+                <span className="ml-2 text-xs text-gray-500">(Ctrl+Scroll to zoom)</span>
+              </span>
             </h2>
-            <CalendarGrid scheduledItems={scheduledItems} ghostPosition={ghostPosition} />
+            <CalendarGrid 
+              scheduledItems={scheduledItems} 
+              ghostPosition={ghostPosition} 
+              pixelsPerSlot={pixelsPerSlot}
+              onZoom={handleZoom}
+            />
           </div>
         </div>
       </div>
