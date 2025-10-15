@@ -2,6 +2,76 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Sidebar CSS variables and smooth resize system */
+:root {
+  --sidebar-w: 320px; /* initial width */
+  --sidebar-min: 240px;
+  --sidebar-max-frac: 0.5; /* 50% of viewport */
+}
+
+/* Root app grid: sidebar + main */
+.app-grid {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  width: 100%;
+  height: 100%;
+}
+
+/* Strongly contain main area to prevent large reflows */
+.main-area {
+  contain: layout paint size;
+}
+
+/* Optional: style tweaks to keep animations cheap */
+.sidebar {
+  will-change: width;
+}
+
+/* Drag proxy: vertical bar that follows cursor during drag */
+.drag-proxy {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  /* Dark grey line */
+  background: rgba(75, 85, 99, 0.9); /* Tailwind gray-600-ish */
+  transform: translateX(0);
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* While dragging, prevent calendar panning/selection and text selection */
+.body--sidebar-dragging,
+.body--sidebar-dragging * {
+  user-select: none !important;
+  cursor: col-resize !important;
+}
+
+/* Conflict detection visuals */
+.event--conflict {
+  border-color: rgba(239, 68, 68, 0.75) !important; /* red-500-ish */
+  background: rgba(239, 68, 68, 0.10) !important;
+}
+
+/* Optional: red overlay guide inside day column when conflict present */
+.day-col--conflict::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 2px rgba(239, 68, 68, 0.35);
+  z-index: 1;
+}
+
+/* Hide scrollbar while preserving scroll functionality */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;  /* IE/Edge */
+  scrollbar-width: none;      /* Firefox */
+}
+
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',

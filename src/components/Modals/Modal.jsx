@@ -2,7 +2,15 @@
 // COMPONENT: Modal (reusable confirmation dialog)
 // ========================================
 
-export default function Modal({ isOpen, title, children, onConfirm, onCancel }) {
+export default function Modal({ 
+  isOpen, 
+  title, 
+  children, 
+  onConfirm, 
+  onCancel, 
+  confirmText = "Allow",
+  cancelText = "Cancel"
+}) {
   if (!isOpen) return null;
 
   return (
@@ -20,17 +28,19 @@ export default function Modal({ isOpen, title, children, onConfirm, onCancel }) 
         
         {/* Action Buttons */}
         <div className="flex gap-3 justify-end">
-          <button
-            onClick={onCancel}
-            className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition-colors font-medium"
-          >
-            Cancel
-          </button>
+          {cancelText && (
+            <button
+              onClick={onCancel}
+              className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition-colors font-medium"
+            >
+              {cancelText}
+            </button>
+          )}
           <button
             onClick={onConfirm}
             className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors font-medium"
           >
-            Allow
+            {confirmText}
           </button>
         </div>
       </div>

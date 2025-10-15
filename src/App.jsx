@@ -26,9 +26,17 @@ import {
   closestCenter,
   useDndMonitor,
 } from '@dnd-kit/core';
+import { restrictToWindowEdges } from '@dnd-kit/modifiers';
 import { format } from 'date-fns';
 import { dateStore } from './state/dateStore';
+import { eventsStore } from './state/eventsStore';
+import { uiStore } from './state/uiStore';
+import { layoutStore } from './state/layoutStore';
+import { MOVE_POLICY, CONFLICT_BEHAVIOR } from './config/policies';
 import DateStrip from './components/DateStrip';
+import MultiDayCalendar from './components/MultiDayCalendar';
+import HamburgerButton from './components/HamburgerButton';
+import { computeEventLayout } from './utils/overlap';
 
 // ========================================
 // PHASE 1 DIAGNOSTICS - Duplicate Draggable Detection
@@ -156,6 +164,164 @@ function checkOverlap(newEvent, existingEvents) {
   });
   
   return overlappingEvents;
+}
+
+// ========================================
+// ROBUST CONFLICT DETECTION (bitset-based, per-day slot occupancy)
+// ========================================
+
+// Debug flag - set to true to see conflict detection logs
+const DEBUG_CONFLICTS = true;
+
+const SLOT_MIN = 15; // minutes per slot
+const DAY_SLOTS = Math.floor((24 * 60) / SLOT_MIN); // 96 slots per day
+
+// Convert minute to slot index (0..95)
+function minToSlot(min) {
+  const s = Math.floor(min / SLOT_MIN);
+  return Math.max(0, Math.min(DAY_SLOTS - 1, s));
+}
+
+// Canonicalize event interval to slot range [sStart, sEnd) - half-open
+// Enforce at least 1 slot and valid bounds
+function toSlotRange(ev) {
+  // Extract start and end from event (support both formats)
+  const startMin = ev.startMinutes || ev.start || 0;
+  const endMin = ev.endMinutes || ev.end || (startMin + (ev.duration || SLOT_MIN));
+  
+  const a = Math.max(0, Math.min(startMin, endMin));
+  const b = Math.max(a + SLOT_MIN, Math.max(startMin, endMin));
+  const sStart = minToSlot(a);
+  const sEnd = minToSlot(b);
+  return [sStart, Math.max(sStart + 1, Math.min(sEnd, DAY_SLOTS))];
+}
+
+// Bitset: Uint32Array of length 3 (3*32 = 96 bits)
+function makeEmptyBits() {
+  return new Uint32Array(3);
+}
+
+// Set bits [sStart, sEnd) in the bitset
+function setRange(bits, sStart, sEnd) {
+  for (let s = sStart; s < sEnd; s++) {
+    const i = (s / 32) | 0;
+    const o = s % 32;
+    bits[i] |= (1 << o) >>> 0;
+  }
+}
+
+// Test overlap of [sStart, sEnd) against bits
+function hasOverlap(bits, sStart, sEnd) {
+  for (let s = sStart; s < sEnd; s++) {
+    const i = (s / 32) | 0;
+    const o = s % 32;
+    if (bits[i] & ((1 << o) >>> 0)) return true;
+  }
+  return false;
+}
+
+// Build day->bits occupancy map from events (excluding specified id)
+function buildDayOccupancy(events, excludeId = null) {
+  const map = new Map(); // dayKey -> Uint32Array(3)
+  
+  if (DEBUG_CONFLICTS) {
+    console.log('🔧 buildDayOccupancy:', {
+      totalEvents: events.length,
+      excludeId,
+      eventsWithDateKey: events.filter(e => e.dateKey).length,
+    });
+  }
+  
+  for (const ev of events) {
+    if (!ev.dateKey) {
+      if (DEBUG_CONFLICTS) console.warn('⚠️ Event without dateKey:', ev);
+      continue;
+    }
+    if (excludeId && ev.id === excludeId) {
+      if (DEBUG_CONFLICTS) console.log('  → Excluding:', ev.id);
+      continue;
+    }
+    
+    const [s, e] = toSlotRange(ev);
+    let bits = map.get(ev.dateKey);
+    if (!bits) {
+      bits = makeEmptyBits();
+      map.set(ev.dateKey, bits);
+    }
+    setRange(bits, s, e);
+    
+    if (DEBUG_CONFLICTS) {
+      console.log(`  → Occupying ${ev.dateKey} slots ${s}-${e} (${ev.id}:`, ev.label || ev.name, ')');
+    }
+  }
+  
+  if (DEBUG_CONFLICTS) {
+    console.log('✅ Occupancy map built:', {
+      days: Array.from(map.keys()),
+      totalDays: map.size,
+    });
+  }
+  
+  return map;
+}
+
+// Check if candidate conflicts with occupancy map
+function isConflicting(candidate, occupancy) {
+  if (!candidate || !candidate.dateKey) {
+    if (DEBUG_CONFLICTS) console.warn('⚠️ isConflicting: Invalid candidate', candidate);
+    return false;
+  }
+  
+  const [s, e] = toSlotRange(candidate);
+  const bits = occupancy.get(candidate.dateKey);
+  
+  if (!bits) {
+    if (DEBUG_CONFLICTS) {
+      console.log('ℹ️ isConflicting: No occupancy for day', candidate.dateKey);
+    }
+    return false; // Empty day -> no conflicts
+  }
+  
+  const conflict = hasOverlap(bits, s, e);
+  
+  if (DEBUG_CONFLICTS) {
+    console.log('🔍 isConflicting:', {
+      candidate: {
+        id: candidate.id,
+        dateKey: candidate.dateKey,
+        startMinutes: candidate.startMinutes || candidate.start,
+        endMinutes: candidate.endMinutes || candidate.end,
+        slots: `${s}-${e}`,
+      },
+      hasConflict: conflict,
+      dayHasEvents: !!bits,
+    });
+  }
+  
+  return conflict;
+}
+
+// Find IDs of events that conflict with candidate (for modal)
+function listConflictingEventIds(candidate, events, excludeId = null) {
+  if (!candidate || !candidate.dateKey) return [];
+  
+  const [sC, eC] = toSlotRange(candidate);
+  const sameDay = events.filter(
+    (ev) => ev.dateKey === candidate.dateKey && (!excludeId || ev.id !== excludeId)
+  );
+  
+  const ids = [];
+  for (const ev of sameDay) {
+    const [s, e] = toSlotRange(ev);
+    if (sC < e && s < eC) ids.push(ev.id);
+  }
+  return ids;
+}
+
+// Helper: Get actual event objects that conflict
+function listConflicts(allEvents, candidate, excludeId = null) {
+  const ids = listConflictingEventIds(candidate, allEvents, excludeId);
+  return allEvents.filter(ev => ids.includes(ev.id));
 }
 
 // Format minutes to time string (e.g., "9:30 AM")
@@ -684,21 +850,35 @@ import { useDraggable, useDroppable } from '@dnd-kit/core';
 // PHASE 2 FIX: Separate component that doesn't call useDraggable
 // ========================================
 
-function ScheduledItemPreview({ item, pixelsPerSlot }) {
+function ScheduledItemPreview({ 
+  item, 
+  pixelsPerSlot,
+  layoutStyle = { leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 },
+  showDebug = false,
+}) {
   const topPosition = minutesToPixels(item.startMinutes, pixelsPerSlot);
   const duration = item.duration || 30;
   const height = minutesToPixels(duration, pixelsPerSlot);
   const endMinutes = item.startMinutes + duration;
+  
+  const { leftPct, widthPct, columnIndex, overlapCount } = layoutStyle;
 
   return (
     <div
-      className={`absolute left-20 right-2 ${item.color} text-white px-3 py-2 rounded shadow-lg z-10 flex flex-col justify-between overflow-visible`}
+      className={`absolute ${item.color} text-white px-3 py-2 rounded shadow-lg z-10 flex flex-col justify-between overflow-visible`}
       style={{
         top: `${topPosition}px`,
         height: `${height}px`,
+        left: `${leftPct}%`,
+        width: `${widthPct}%`,
       }}
       data-preview="true"
     >
+      {showDebug && (
+        <div className="absolute top-0 right-0 text-[10px] bg-black/40 px-1 rounded-bl pointer-events-none">
+          col {columnIndex} / {overlapCount}
+        </div>
+      )}
       <div>
         <div className="font-semibold text-sm">{item.label}</div>
         <div className="text-xs opacity-90">
@@ -726,7 +906,15 @@ function ScheduledItemPreview({ item, pixelsPerSlot }) {
 // COMPONENT: ScheduledItem (task placed in calendar)
 // ========================================
 
-function ScheduledItem({ item, pixelsPerSlot, onResizeStart, isBeingResized = false, isResizing = false }) {
+function ScheduledItem({ 
+  item, 
+  pixelsPerSlot, 
+  onResizeStart, 
+  isBeingResized = false, 
+  isResizing = false,
+  layoutStyle = { leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 },
+  showDebug = false,
+}) {
   // PHASE 1 DIAGNOSTIC: Track this render
   trackScheduledItemRender(item.id);
 
@@ -776,11 +964,16 @@ function ScheduledItem({ item, pixelsPerSlot, onResizeStart, isBeingResized = fa
   const duration = item.duration || 30; // Default to 30 minutes if not specified
   const height = minutesToPixels(duration, pixelsPerSlot);
   
+  // Extract layout positioning
+  const { leftPct, widthPct, columnIndex, overlapCount } = layoutStyle;
+  
   // Apply transform for dragging
   // CRITICAL: Only apply transform when actually dragging AND drag is allowed
   const style = {
     top: `${topPosition}px`,
     height: `${height}px`,
+    left: `${leftPct}%`,
+    width: `${widthPct}%`,
     transform: (isDragging && allowDrag && transform) 
       ? `translate3d(${transform.x}px, ${transform.y}px, 0)` 
       : undefined, // Gate transform to prevent animation during resize
@@ -795,11 +988,16 @@ function ScheduledItem({ item, pixelsPerSlot, onResizeStart, isBeingResized = fa
       ref={setNodeRef}
       {...attributes}
       {...listenersOnState}  // StackOverflow pattern: only spread when allowDrag=true
-      className={`absolute left-20 right-2 ${item.color} text-white px-3 py-2 rounded shadow-lg ${allowDrag ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'} z-10 flex flex-col justify-between overflow-visible`}
+      className={`absolute ${item.color} text-white px-3 py-2 rounded shadow-lg ${allowDrag ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'} z-10 flex flex-col justify-between overflow-visible`}
       style={style}
       data-event-id={item.id}
       data-allow-drag={allowDrag}
     >
+      {showDebug && (
+        <div className="absolute top-0 right-0 text-[10px] bg-black/40 px-1 rounded-bl pointer-events-none">
+          col {columnIndex} / {overlapCount}
+        </div>
+      )}
       <div>
       <div className="font-semibold text-sm">{item.label}</div>
         <div className="text-xs opacity-90">
@@ -856,7 +1054,12 @@ function ScheduledItem({ item, pixelsPerSlot, onResizeStart, isBeingResized = fa
 // COMPONENT: GhostEvent (preview of where event will be placed)
 // ========================================
 
-function GhostEvent({ ghostPosition, pixelsPerSlot }) {
+function GhostEvent({ 
+  ghostPosition, 
+  pixelsPerSlot,
+  layoutStyle = { leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 },
+  showDebug = false,
+}) {
   if (!ghostPosition) return null;
 
   const { startMinutes, task } = ghostPosition;
@@ -868,15 +1071,24 @@ function GhostEvent({ ghostPosition, pixelsPerSlot }) {
   
   // Calculate end time for preview
   const endMinutes = startMinutes + duration;
+  
+  const { leftPct, widthPct, columnIndex, overlapCount } = layoutStyle;
 
   return (
     <div
-      className="absolute left-20 right-2 border-2 border-gray-400 border-dashed rounded bg-gray-50 bg-opacity-30 z-20 pointer-events-none px-3 py-2 flex flex-col justify-between"
+      className="absolute border-2 border-gray-400 border-dashed rounded bg-gray-50 bg-opacity-30 z-20 pointer-events-none px-3 py-2 flex flex-col justify-between"
       style={{ 
         top: `${topPosition}px`,
         height: `${height}px`,
+        left: `${leftPct}%`,
+        width: `${widthPct}%`,
       }}
     >
+      {showDebug && (
+        <div className="absolute top-0 right-0 text-[10px] bg-black/40 px-1 rounded-bl">
+          col {columnIndex} / {overlapCount}
+        </div>
+      )}
       <div className="text-gray-700 text-sm font-medium">
         {task.label}
       </div>
@@ -891,7 +1103,28 @@ function GhostEvent({ ghostPosition, pixelsPerSlot }) {
 // COMPONENT: CalendarGrid (time slots + drop zone)
 // ========================================
 
-function CalendarGrid({ scheduledItems, ghostPosition, pixelsPerSlot, onZoom, calendarDomRef, resizeDraft, onResizeStart, isResizing }) {
+/**
+ * NEW PROPS (optional, for multi-day support):
+ * - dayDate: Date         // The date this grid represents
+ * - dayKey: string        // ISO date key 'YYYY-MM-DD' for persistence/queries
+ * - idNamespace: string   // unique prefix to namespace droppable IDs (e.g. 'day:2025-10-15')
+ * - onDrop: (payload) => void  // callback when an item is dropped in this grid
+ */
+function CalendarGrid({ 
+  scheduledItems, 
+  ghostPosition, 
+  pixelsPerSlot, 
+  onZoom, 
+  calendarDomRef, 
+  resizeDraft, 
+  onResizeStart, 
+  isResizing,
+  // New props for multi-day support (optional)
+  dayDate,
+  dayKey,
+  idNamespace,
+  onDrop,
+}) {
   const timeSlots = generateTimeSlots();
   const calendarHeight = (END_HOUR - START_HOUR) * 60 * (pixelsPerSlot / MINUTES_PER_SLOT);
   
@@ -899,9 +1132,37 @@ function CalendarGrid({ scheduledItems, ghostPosition, pixelsPerSlot, onZoom, ca
   const [isDragging, setIsDragging] = React.useState(false);
   const [dragStart, setDragStart] = React.useState({ x: 0, y: 0, scrollTop: 0 });
 
+  // Consume UI store for drag/resize state (centralized)
+  const ui = useUiStore();
+  
+  // Only show ghost in this grid if it's currently hovered
+  const isHoveringThisGrid = idNamespace ? (ui.dragOverNamespace === idNamespace) : true;
+  
+  // Only show resize draft if it's for this day
+  const showResizeDraft = resizeDraft && (!idNamespace || resizeDraft.dateKey === dayKey);
+  
+  // ========================================
+  // HORIZONTAL LAYOUT FOR OVERLAPPING EVENTS (Google Calendar style)
+  // ========================================
+  const layout = React.useMemo(() => {
+    console.log('📊 CalendarGrid computing layout for', scheduledItems.length, 'items');
+    const result = computeEventLayout(scheduledItems);
+    console.log('📊 Layout result:', result);
+    return result;
+  }, [scheduledItems]);
+  
+  const showDebugLabels = true; // Show debug labels to verify layout
+
   // Make the entire calendar a droppable zone
+  // Use namespaced ID if provided (multi-day), otherwise 'calendar' (single-day backward compat)
+  const droppableId = idNamespace ? `${idNamespace}::calendar` : 'calendar';
+  
   const { setNodeRef } = useDroppable({
-    id: 'calendar',
+    id: droppableId,
+    data: {
+      dayKey: dayKey || null,
+      dayDate: dayDate || null,
+    },
   });
 
   // ========================================
@@ -984,10 +1245,18 @@ function CalendarGrid({ scheduledItems, ghostPosition, pixelsPerSlot, onZoom, ca
         containerRef.current = node;
         if (node && calendarDomRef) calendarDomRef.current = node;
       }}
-      data-droppable-id="calendar"
-      className={`relative bg-white border-l border-gray-300 ${isDragging ? 'cursor-grabbing' : 'cursor-default'}`}
-      style={{ height: `${calendarHeight}px` }}
+      data-droppable-id={droppableId}
+      data-day-key={dayKey || 'default'}
+      className={`relative bg-white ${!idNamespace ? 'border-l border-gray-300' : ''} ${isDragging ? 'cursor-grabbing' : 'cursor-default'} no-scrollbar overflow-x-hidden overscroll-x-contain touch-pan-y`}
+      style={{ height: `${calendarHeight}px`, touchAction: 'pan-y' }}
       onMouseDown={handleMouseDown}
+      onWheel={(e) => {
+        // Suppress horizontal wheel gestures to prevent panning
+        if (!e.ctrlKey && !e.metaKey && Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+          e.preventDefault();
+        }
+        // Zoom handling continues in handleWheel callback
+      }}
     >
       {/* Time labels and grid lines */}
       {timeSlots.map((slot, index) => {
@@ -1014,37 +1283,54 @@ function CalendarGrid({ scheduledItems, ghostPosition, pixelsPerSlot, onZoom, ca
       })}
 
       {/* Scheduled items - CRITICAL: Skip item being resized to avoid duplicate draggable */}
+      {/* Use per-day keys to prevent React recycling across columns */}
       {scheduledItems
         .filter(item => {
           const isBeingResized = resizeDraft?.id === item.id;
           return !isBeingResized; // Don't render the real draggable when resizing
         })
-        .map((item) => (
-          <ScheduledItem 
-            key={item.id} 
-            item={item} 
-            pixelsPerSlot={pixelsPerSlot}
-            onResizeStart={onResizeStart}
-            isBeingResized={false} // Never true here since we filtered it out
-            isResizing={isResizing}
-          />
-        ))
+        .map((item) => {
+          const itemLayout = layout[item.id] || { leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 };
+          return (
+            <ScheduledItem 
+              key={dayKey ? `${item.id}@${dayKey}` : item.id}
+              item={item} 
+              pixelsPerSlot={pixelsPerSlot}
+              onResizeStart={onResizeStart}
+              isBeingResized={false} // Never true here since we filtered it out
+              isResizing={isResizing}
+              layoutStyle={itemLayout}
+              showDebug={showDebugLabels}
+            />
+          );
+        })
       }
 
       {/* Live resize draft - shows preview while resizing */}
       {/* PHASE 2 FIX: Use ScheduledItemPreview (no useDraggable) to avoid duplicate ID */}
-      {resizeDraft && (
+      {/* Only show if this is the active day for resize */}
+      {showResizeDraft && (
         <div className="pointer-events-none absolute inset-0 z-30">
           <ScheduledItemPreview
-            key={`preview-${resizeDraft.id}`}
+            key={`preview-${resizeDraft.id}@${dayKey || 'default'}`}
             item={resizeDraft}
             pixelsPerSlot={pixelsPerSlot}
+            layoutStyle={layout[resizeDraft.id] || { leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 }}
+            showDebug={showDebugLabels}
           />
         </div>
       )}
 
       {/* Ghost/shadow preview - shows where dragged item will land */}
-      <GhostEvent ghostPosition={ghostPosition} pixelsPerSlot={pixelsPerSlot} />
+      {/* Only render ghost in the grid that's currently hovered */}
+      {isHoveringThisGrid && (
+        <GhostEvent 
+          ghostPosition={ghostPosition} 
+          pixelsPerSlot={pixelsPerSlot}
+          layoutStyle={{ leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 }}
+          showDebug={showDebugLabels}
+        />
+      )}
     </div>
   );
 }
@@ -1069,7 +1355,7 @@ function DndEventMonitor({ isResizing, resizeTarget, resizeDraft }) {
 // DATE STORE HOOK
 // ========================================
 
-// Subscribe to date store (tiny external-store pattern)
+// Subscribe to stores (tiny external-store pattern)
 function useDateStore() {
   const snapshot = useSyncExternalStore(
     dateStore.subscribe,
@@ -1079,11 +1365,322 @@ function useDateStore() {
   return { ...snapshot, ...dateStore.actions, utils: dateStore.utils };
 }
 
+function useEventsStore() {
+  const snapshot = useSyncExternalStore(
+    eventsStore.subscribe,
+    eventsStore.get,
+    eventsStore.get
+  );
+  return { ...snapshot, ...eventsStore };
+}
+
+function useUiStore() {
+  const snapshot = useSyncExternalStore(
+    uiStore.subscribe,
+    uiStore.get,
+    uiStore.get
+  );
+  return { ...snapshot, ...uiStore };
+}
+
+
+// Helper to parse namespace from droppable ID
+function parseNs(id) {
+  if (!id) return null;
+  const s = String(id);
+  const idx = s.indexOf('::');
+  return idx === -1 ? s : s.slice(0, idx);
+}
+
+// DnD Monitor Bridge - Must be child of DndContext
+function DndMonitorBridge() {
+  useDndMonitor({
+    onDragOver: ({ over }) => {
+      uiStore.setDragOverNs(parseNs(over?.id));
+    },
+    onDragCancel: () => uiStore.clearDragOverNs(),
+    onDragEnd: () => uiStore.clearDragOverNs(),
+  });
+  return null;
+}
+
+// ========================================
+// SMOOTH SIDEBAR RESIZE (drag proxy + snap-on-commit)
+// ========================================
+
+// Utility: clamp helper
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+// Utility: compute allowed max based on viewport
+const computeMaxWidth = () => Math.floor(window.innerWidth * parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-max-frac') || '0.5'));
+
+// Utility: choose a snap candidate (coarse during drag)
+function getSnapCandidate(px, snapPoints, hysteresis = 12) {
+  // prefer the closest snap point if within hysteresis; else return raw px
+  let best = { d: Infinity, s: px };
+  for (const s of snapPoints) {
+    const d = Math.abs(px - s);
+    if (d < best.d) best = { d, s };
+  }
+  return best.d <= hysteresis ? best.s : px;
+}
+
+// A thin vertical handle at the right edge of the sidebar
+function SidebarResizeHandle({ onPointerDown }) {
+  return (
+    <div
+      aria-label="Resize sidebar"
+      onPointerDown={onPointerDown}
+      className="absolute top-0 right-0 h-full w-2 cursor-col-resize select-none z-40"
+      style={{ touchAction: "none" }}
+    >
+      {/* Centered grab icon overlay */}
+      <div
+        className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none"
+        aria-hidden="true"
+      >
+        {/* Simple SVG grip (two dots) – lightweight and neutral */}
+        <svg width="10" height="20" viewBox="0 0 10 20" fill="none">
+          <circle cx="5" cy="6" r="1.5" fill="rgba(75,85,99,0.9)" />
+          <circle cx="5" cy="14" r="1.5" fill="rgba(75,85,99,0.9)" />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+// The on-screen proxy line that follows the cursor during drag
+function DragProxy({ x, visible }) {
+  if (!visible) return null;
+  return (
+    <div
+      className="drag-proxy"
+      style={{ left: x }}
+    />
+  );
+}
+
+// Compact sticky header for left pane with controls
+function LeftPaneHeader({
+  onOpenCreateEvent,
+  onOpenTypes,
+}) {
+  return (
+    <div className="sticky top-0 z-10 bg-gray-50/95 backdrop-blur border-b border-gray-200 px-4 py-3 flex items-center justify-between">
+      <div className="text-sm font-semibold text-gray-700">
+        Event Templates
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onOpenTypes}
+          className="inline-flex items-center rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-400/50 shadow-sm"
+          aria-label="Manage Types"
+          title="Manage Types"
+        >
+          {/* simple icon: tags */}
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M20 10L12 2H4v8l8 8 8-8z" stroke="currentColor" strokeWidth="1.5" />
+            <circle cx="7" cy="7" r="1.5" fill="currentColor" />
+          </svg>
+          <span className="ml-1.5">Types</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={onOpenCreateEvent}
+          className="inline-flex items-center rounded-md bg-blue-600 text-white px-2.5 py-1.5 text-xs font-semibold hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-400/50 shadow-sm"
+          aria-label="Add Event"
+          title="Add Event"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+          </svg>
+          <span className="ml-1.5">Add</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ========================================
+// CENTRALIZED CONFLICT GATE (single source of truth for all commits)
+// ========================================
+
+// Unified conflict gate used by resize/move/place
+function assertNoConflictOrStageConfirm({
+  candidate,         // {id?, dayKey, start, end} or {id?, dateKey, startMinutes, endMinutes/duration}
+  events,            // current scheduled events
+  setPendingAction,  // state setter to stage modal payload
+  openConflictModal, // () => void
+  onCommitSafe,      // (candidate) => void - called only when no conflict
+  isCommittingRef,   // React.useRef to prevent double-commits
+}) {
+  console.log('🚪 CONFLICT GATE CALLED:', {
+    candidate,
+    totalEvents: events.length,
+    isCommittingRefLocked: isCommittingRef?.current,
+  });
+  
+  // Normalize candidate to bitset format
+  const normalized = {
+    id: candidate.id,
+    dateKey: candidate.dateKey || candidate.dayKey,
+    start: candidate.startMinutes || candidate.start,
+    end: candidate.endMinutes || candidate.end || (candidate.startMinutes + candidate.duration) || (candidate.start + 30),
+  };
+  
+  console.log('📋 Normalized candidate:', normalized);
+  
+  // Exclude the event itself (if moving/resizing an existing one)
+  const excludeId = normalized.id ?? null;
+  const occ = buildDayOccupancy(events, excludeId);
+
+  if (isConflicting(normalized, occ)) {
+    const neighbors = listConflicts(events, normalized, excludeId);
+    console.log('❌ CONFLICT DETECTED! Neighbors:', neighbors);
+    setPendingAction({ kind: "conflict", candidate, neighbors });
+    openConflictModal();
+    return false;
+  }
+
+  // Safe path - no conflicts
+  console.log('✅ NO CONFLICT - Committing safely');
+  onCommitSafe(candidate);
+  if (isCommittingRef) {
+    isCommittingRef.current = false;
+  }
+  return true;
+}
+
+// Lightweight resizer controller (rAF + CSS var + commit-on-release)
+function useSidebarResizeController(initialWidth = 320) {
+  const isDraggingRef = React.useRef(false);
+  const startXRef = React.useRef(0);
+  const startWidthRef = React.useRef(initialWidth);
+  const liveRawRef = React.useRef(initialWidth); // raw pixel width under cursor
+  const rafRef = React.useRef(0);
+
+  const [proxy, setProxy] = React.useState({ visible: false, x: 0 });
+
+  // Snap points (coarse preview during drag); tweak as desired
+  const snapPoints = useMemo(() => [240, 280, 320, 360, 400, 460, 520], []);
+
+  // Load from localStorage once
+  React.useEffect(() => {
+    try {
+      const saved = parseInt(localStorage.getItem("sidebarWidth") || "", 10);
+      if (!Number.isNaN(saved)) {
+        startWidthRef.current = saved;
+        liveRawRef.current = saved;
+        document.documentElement.style.setProperty("--sidebar-w", `${saved}px`);
+      } else {
+        document.documentElement.style.setProperty("--sidebar-w", `${initialWidth}px`);
+      }
+    } catch {
+      document.documentElement.style.setProperty("--sidebar-w", `${initialWidth}px`);
+    }
+  }, [initialWidth]);
+
+  // Pointer handlers
+  const onPointerDown = React.useCallback((e) => {
+    e.preventDefault();
+    isDraggingRef.current = true;
+    startXRef.current = e.clientX;
+    const style = getComputedStyle(document.documentElement);
+    const current = parseInt(style.getPropertyValue("--sidebar-w"), 10) || startWidthRef.current;
+    startWidthRef.current = current;
+    liveRawRef.current = current;
+
+    document.body.classList.add("body--sidebar-dragging");
+
+    const onPointerMove = (ev) => {
+      if (!isDraggingRef.current) return;
+
+      const min = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-min"), 10) || 240;
+      const max = computeMaxWidth();
+      const dx = ev.clientX - startXRef.current;
+      const raw = clamp(startWidthRef.current + dx, min, max);
+      liveRawRef.current = raw;
+
+      // Coarse snap PREVIEW (proxy snaps visually)
+      const snapped = getSnapCandidate(raw, snapPoints, 12);
+
+      // Update proxy once per frame
+      if (!rafRef.current) {
+        rafRef.current = requestAnimationFrame(() => {
+          setProxy({ visible: true, x: `${snapped}px` });
+          rafRef.current = 0;
+        });
+      }
+    };
+
+    const onPointerUp = () => {
+      if (!isDraggingRef.current) return;
+      isDraggingRef.current = false;
+
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      document.body.classList.remove("body--sidebar-dragging");
+
+      // Final commit with snapping
+      const min = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-min"), 10) || 240;
+      const max = computeMaxWidth();
+      const raw = clamp(liveRawRef.current, min, max);
+      const snapped = getSnapCandidate(raw, snapPoints, 12);
+
+      // Single style write commit
+      document.documentElement.style.setProperty("--sidebar-w", `${snapped}px`);
+
+      // Persist once
+      try {
+        localStorage.setItem("sidebarWidth", String(snapped));
+      } catch {}
+
+      // Hide proxy
+      setProxy((p) => ({ ...p, visible: false }));
+    };
+
+    window.addEventListener("pointermove", onPointerMove, { passive: true });
+    window.addEventListener("pointerup", onPointerUp, { passive: true });
+
+    // show proxy at current edge
+    setProxy({ visible: true, x: `${current}px` });
+  }, [snapPoints]);
+
+  React.useEffect(() => {
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      document.body.classList.remove("body--sidebar-dragging");
+    };
+  }, []);
+
+  return { onPointerDown, proxyState: proxy };
+}
+
 // ========================================
 // MAIN APP COMPONENT
 // ========================================
 
 function App() {
+  // ========================================
+  // POLICY DEBUG (show on mount)
+  // ========================================
+  React.useEffect(() => {
+    console.log('🔧 POLICIES LOADED:', {
+      MOVE_POLICY,
+      CONFLICT_BEHAVIOR,
+      willShowModalOnConflict: MOVE_POLICY === 'confirm-then-commit',
+      willCommitImmediately: MOVE_POLICY === 'always',
+    });
+  }, []);
+  
+  // ========================================
+  // SIDEBAR RESIZE CONTROLLER
+  // ========================================
+  
+  const { onPointerDown, proxyState } = useSidebarResizeController(320);
+  
   // ========================================
   // DATE STORE
   // ========================================
@@ -1100,6 +1697,12 @@ function App() {
   const handleChangeDay = (index, newDate) => {
     setDate(newDate);
   };
+  
+  // ========================================
+  // EVENTS STORE
+  // ========================================
+  
+  const { byId, byDate, getEventsForDate, moveEventToDay, upsertEvent, findConflictsSameDay } = useEventsStore();
   
   // ========================================
   // STATE INITIALIZATION WITH DEMO DATA
@@ -1149,6 +1752,20 @@ function App() {
   const [showOverlapModal, setShowOverlapModal] = useState(false);
   const [pendingEvent, setPendingEvent] = useState(null);
   const [overlappingEvents, setOverlappingEvents] = useState([]);
+  const [pendingAction, setPendingAction] = useState(null); // For centralized conflict gate
+  
+  // Ref: Prevent double-commits while modal is open
+  const isCommittingRef = React.useRef(false);
+  
+  // Debug: Watch for unexpected state changes
+  React.useEffect(() => {
+    if (scheduledItems.length > 0) {
+      console.log('📋 scheduledItems CHANGED:', {
+        count: scheduledItems.length,
+        items: scheduledItems.map(e => ({ id: e.id, label: e.label, dateKey: e.dateKey })),
+      });
+    }
+  }, [scheduledItems]);
   
   // State: Event editor modal
   const [showEventEditor, setShowEventEditor] = useState(false);
@@ -1167,6 +1784,98 @@ function App() {
   React.useEffect(() => {
     setResizingState(isResizing);
   }, [isResizing]);
+
+  // ========================================
+  // CONFLICT DETECTION (bitset-based, draft-aware)
+  // ========================================
+  
+  // Track which event is being moved/resized (exclude from occupancy to avoid self-conflict)
+  const movingId = useMemo(() => {
+    if (resizeDraft && resizeDraft.id) return resizeDraft.id;
+    if (activeId && activeId.startsWith('scheduled-')) return activeId;
+    return null;
+  }, [resizeDraft, activeId]);
+  
+  // Build draft candidate from current ghost position or resize draft
+  const draftCandidate = useMemo(() => {
+    // Priority 1: Resize draft (active resize operation)
+    if (resizeDraft && resizeDraft.dateKey) {
+      const draft = {
+        id: resizeDraft.id,
+        dateKey: resizeDraft.dateKey,
+        startMinutes: resizeDraft.startMinutes,
+        endMinutes: resizeDraft.startMinutes + (resizeDraft.duration || MINUTES_PER_SLOT),
+        duration: resizeDraft.duration || MINUTES_PER_SLOT,
+      };
+      if (DEBUG_CONFLICTS) console.log('📝 Draft from RESIZE:', draft);
+      return draft;
+    }
+    
+    // Priority 2: Ghost position (dragging new or existing event)
+    if (ghostPosition && ghostPosition.startMinutes != null) {
+      const duration = ghostPosition.task?.duration || ghostPosition.duration || MINUTES_PER_SLOT;
+      const targetDayKey = ghostPosition.dayKey || dateKey;
+      const draft = {
+        id: movingId || `ghost-${Date.now()}`,
+        dateKey: targetDayKey,
+        startMinutes: ghostPosition.startMinutes,
+        endMinutes: ghostPosition.startMinutes + duration,
+        duration: duration,
+      };
+      if (DEBUG_CONFLICTS) console.log('📝 Draft from GHOST:', draft);
+      return draft;
+    }
+    
+    if (DEBUG_CONFLICTS && (resizeDraft || ghostPosition)) {
+      console.log('⚠️ Draft conditions not met:', { resizeDraft, ghostPosition });
+    }
+    
+    return null;
+  }, [resizeDraft, ghostPosition, movingId, dateKey]);
+  
+  // Build occupancy map (exclude moving event to avoid self-conflict)
+  const occupancy = useMemo(
+    () => buildDayOccupancy(scheduledItems, movingId || null),
+    [scheduledItems, movingId]
+  );
+  
+  // Check if draft has live conflict
+  const liveConflict = useMemo(() => {
+    if (!draftCandidate) {
+      if (DEBUG_CONFLICTS && (resizeDraft || ghostPosition)) {
+        console.log('⚠️ liveConflict: No draftCandidate despite resize/ghost state');
+      }
+      return false;
+    }
+    
+    const conflict = isConflicting(draftCandidate, occupancy);
+    
+    if (DEBUG_CONFLICTS) {
+      console.log('🎯 Live Conflict Check:', {
+        draftCandidate,
+        hasConflict: conflict,
+        occupancyDays: Array.from(occupancy.keys()),
+      });
+    }
+    
+    return conflict;
+  }, [draftCandidate, occupancy, resizeDraft, ghostPosition]);
+  
+  // Conflict UI state for passing to calendar
+  const conflictUi = useMemo(() => {
+    const ui = {
+      dayKey: draftCandidate?.dateKey || null,
+      liveConflict,
+      draftCandidate,
+      movingId,
+    };
+    
+    if (DEBUG_CONFLICTS && liveConflict) {
+      console.log('🔴 CONFLICT UI STATE:', ui);
+    }
+    
+    return ui;
+  }, [draftCandidate, liveConflict, movingId]);
 
   // MOVED TO DndEventMonitor COMPONENT (must be child of DndContext)
 
@@ -1289,12 +1998,20 @@ function App() {
   
   // User confirms - add/update the pending event despite overlap
   const handleConfirmOverlap = React.useCallback(() => {
+    console.log('✅ CONFIRM OVERLAP CLICKED:', {
+      pendingEvent,
+      isCommittingRefLocked: isCommittingRef.current,
+    });
+    
     if (pendingEvent) {
       // Check if this is a new event or a repositioned existing event
       const isExistingEvent = scheduledItems.some(e => e.id === pendingEvent.id);
       
+      console.log('  → Is existing event?', isExistingEvent);
+      
       if (isExistingEvent) {
         // Repositioning existing event
+        console.log('  → Updating existing event position');
         setScheduledItems((prev) =>
           prev.map((schedItem) =>
             schedItem.id === pendingEvent.id
@@ -1304,34 +2021,56 @@ function App() {
         );
       } else {
         // Adding new event
-        setScheduledItems((prev) => [...prev, pendingEvent]);
+        console.log('  → Adding new event');
+        setScheduledItems((prev) => {
+          const updated = [...prev, pendingEvent];
+          console.log('  → scheduledItems updated to:', updated);
+          return updated;
+        });
         setNextId((prev) => prev + 1);
       }
     }
     
     // Close modal and clear pending state
+    console.log('  → Closing modal and clearing state');
     setShowOverlapModal(false);
     setPendingEvent(null);
     setOverlappingEvents([]);
+    setPendingAction(null);
     
     // CRITICAL: Also clear resize state if this was from a resize operation
     setIsResizing(false);
     setResizeTarget(null);
     setResizeDraft(null);
-  }, [pendingEvent, scheduledItems, isResizing, resizeTarget, resizeDraft]);
+    
+    // Release commit lock
+    console.log('  → Releasing commit lock');
+    isCommittingRef.current = false;
+  }, [pendingEvent, scheduledItems]);
   
   // User cancels - discard the pending event
   const handleCancelOverlap = React.useCallback(() => {
+    console.log('❌ CANCEL OVERLAP CLICKED:', {
+      pendingEvent,
+      isCommittingRefLocked: isCommittingRef.current,
+    });
+    
     // Close modal and clear pending state
+    console.log('  → Closing modal without saving');
     setShowOverlapModal(false);
     setPendingEvent(null);
     setOverlappingEvents([]);
+    setPendingAction(null);
     
     // CRITICAL: Also clear resize state if this was from a resize operation
     setIsResizing(false);
     setResizeTarget(null);
     setResizeDraft(null);
-  }, [pendingEvent, isResizing, resizeTarget, resizeDraft]);
+    
+    // Release commit lock
+    console.log('  → Releasing commit lock');
+    isCommittingRef.current = false;
+  }, [pendingEvent]);
 
   // ========================================
   // RESIZE HANDLERS
@@ -1411,8 +2150,11 @@ function App() {
 
     const updated = { ...resizeDraft, startMinutes: start, duration };
 
-    // Overlap check excluding itself
-    const others = scheduledItems.filter(e => e.id !== updated.id);
+    // Overlap check excluding itself, only within same day
+    const others = scheduledItems.filter(e => 
+      e.id !== updated.id && 
+      (e.dateKey === updated.dateKey || (!e.dateKey && !updated.dateKey))
+    );
     const overlaps = checkOverlap(updated, others);
 
     if (overlaps.length > 0) {
@@ -1500,7 +2242,8 @@ function App() {
     // For template drags, require being over the calendar
     // For scheduled drags, be resilient to missing 'over' (collision detection can miss after resize)
     if (activeData.type === 'template') {
-      if (!over || over.id !== 'calendar') {
+      const isOverCalendar = over?.id === 'calendar' || over?.id?.includes('::calendar');
+      if (!over || !isOverCalendar) {
         setGhostPosition(null);
         return;
       }
@@ -1509,7 +2252,10 @@ function App() {
 
     // Get calendar element to calculate position
     // FIX: Null-safe lookup chain - over can be undefined after resize
-    const calendarElement = over?.node?.current || calendarDomRef.current || document.querySelector('[data-droppable-id="calendar"]');
+    // Handle both namespaced and non-namespaced calendar IDs
+    const calendarElement = over?.node?.current || calendarDomRef.current || 
+      document.querySelector('[data-droppable-id="calendar"]') ||
+      document.querySelector('[data-droppable-id*="::calendar"]');
     if (!calendarElement) {
       console.warn('⚠️ Calendar element not found - all three lookups failed:', {
         hasOver: !!over,
@@ -1584,10 +2330,24 @@ function App() {
   }
 
   function handleDragEnd(event) {
+    window._dragMoveCount = 0; // Reset counter
+    
+    console.log('');
+    console.log('═══════════════════════════════════════');
+    console.log('🎬 handleDragEnd CALLED');
+    console.log('═══════════════════════════════════════');
+    console.log('  Active ID:', event.active.id);
+    console.log('  Over ID:', event.over?.id);
+    console.log('  Active Data:', event.active.data.current);
+    console.log('  Delta:', event.delta);
+    console.log('═══════════════════════════════════════');
+    console.log('');
+    
     // ========================================
     // IGNORE DRAG END IF CURRENTLY RESIZING
     // ========================================
     if (isResizing) {
+      console.log('⏸️ Ignoring drag end (currently resizing)');
       setActiveId(null);
       return;
     }
@@ -1601,8 +2361,9 @@ function App() {
     // FIX: Only require 'over' for template drags (new placements)
     // For scheduled drags (repositioning), allow fallback calculation even if over is null
     if (activeData?.type === 'template') {
-      // Templates must be dropped on calendar
-      if (over?.id !== 'calendar') {
+      // Templates must be dropped on a calendar (handle both namespaced and non-namespaced IDs)
+      const isCalendarDrop = over?.id === 'calendar' || over?.id?.includes('::calendar');
+      if (!isCalendarDrop) {
         setGhostPosition(null);
         return;
       }
@@ -1610,6 +2371,8 @@ function App() {
     // For scheduled items, continue even if over is missing (resilient to post-resize collision detection issues)
 
     if (activeData.type === 'template') {
+      console.log('📥 TEMPLATE DROP (from left pane)');
+      
       // ========================================
       // DRAGGING FROM LEFT PANEL - CREATE NEW SCHEDULED ITEM
       // Use the ghost preview position for placement
@@ -1625,6 +2388,9 @@ function App() {
       const finalMinutes = ghostPosition.startMinutes;
       const duration = task.duration || 30; // Use task duration or default to 30 min
 
+      // Extract target dayKey from drop zone (if multi-day)
+      const targetDayKey = over?.data?.current?.dayKey || dateKey;
+      
       const newItem = {
         id: `scheduled-${nextId}`,
         label: task.name || task.label, // Support both name and label
@@ -1632,23 +2398,97 @@ function App() {
         startMinutes: finalMinutes,
         duration: duration,
         typeId: task.typeId || null, // Preserve type association
+        dateKey: targetDayKey, // NEW: Associate with target day
       };
+      
+      console.log('📦 New item to place:', newItem);
 
       // ========================================
-      // CHECK FOR OVERLAPS
+      // APPLY MOVE POLICY for template drops (uses centralized conflict gate)
       // ========================================
-      const overlaps = checkOverlap(newItem, scheduledItems);
+      console.log('📊 Current MOVE_POLICY:', MOVE_POLICY);
+      console.log('📊 Current scheduledItems count:', scheduledItems.length);
+      console.log('📊 Target dayKey:', targetDayKey);
       
-      if (overlaps.length > 0) {
-        // Overlap detected - show modal for confirmation
-        setPendingEvent(newItem);
-        setOverlappingEvents(overlaps);
-        setShowOverlapModal(true);
-        setGhostPosition(null);
-      } else {
-        // No overlap - add event directly
+      if (MOVE_POLICY === 'always') {
+        console.log('⚡ ALWAYS MODE: Committing immediately WITHOUT conflict gate');
+        
+        // COMMIT THE CREATION IMMEDIATELY
         setScheduledItems((prev) => [...prev, newItem]);
         setNextId((prev) => prev + 1);
+        setGhostPosition(null);
+        
+        // Optional: Check conflicts for informational purposes
+        if (CONFLICT_BEHAVIOR === 'inform') {
+          console.log('ℹ️ INFORM MODE: Checking conflicts post-commit');
+          const candidate = {
+            dateKey: newItem.dateKey,
+            startMinutes: newItem.startMinutes,
+            endMinutes: newItem.startMinutes + newItem.duration,
+          };
+          const occ = buildDayOccupancy(scheduledItems, newItem.id);
+          
+          if (isConflicting(candidate, occ)) {
+            console.log('ℹ️ Conflict found (informational only)');
+            const conflicts = listConflicts(scheduledItems, newItem);
+            setPendingEvent(null); // Not pending - already committed
+            setOverlappingEvents(conflicts);
+            setShowOverlapModal(true);
+          }
+        } else {
+          console.log('🔕 ALLOW MODE: No conflict checking at all');
+        }
+      } else {
+        // LEGACY: confirm-then-commit policy (uses bitset conflict gate)
+        console.log('🔐 Using confirm-then-commit policy for template drop');
+        
+        if (isCommittingRef.current) {
+          console.warn('⚠️ Already committing, ignoring');
+          return;
+        }
+        isCommittingRef.current = true;
+        
+        console.log('🚪 Calling conflict gate for template drop...');
+        
+        console.log('  → isCommittingRef.current BEFORE gate:', isCommittingRef.current);
+        
+        const gateResult = assertNoConflictOrStageConfirm({
+          candidate: {
+            id: newItem.id,
+            dateKey: newItem.dateKey,
+            startMinutes: newItem.startMinutes,
+            endMinutes: newItem.startMinutes + newItem.duration,
+          },
+          events: scheduledItems,
+          setPendingAction: (action) => {
+            console.log('📌 Setting pending action from template drop:', action);
+            setPendingEvent(newItem);
+            setOverlappingEvents(action.neighbors);
+          },
+          openConflictModal: () => {
+            console.log('🚨 Opening conflict modal for template drop');
+            setShowOverlapModal(true);
+          },
+          onCommitSafe: () => {
+            console.log('✅ Template drop safe - committing');
+            setScheduledItems((prev) => {
+              const updated = [...prev, newItem];
+              console.log('  → Updated scheduledItems:', updated);
+              return updated;
+            });
+            setNextId((prev) => prev + 1);
+          },
+          isCommittingRef,
+        });
+        
+        console.log('🏁 Conflict gate returned:', gateResult);
+        console.log('  → isCommittingRef.current AFTER gate:', isCommittingRef.current);
+        
+        if (!gateResult) {
+          console.log('⚠️ Gate blocked commit (conflict), should NOT add to scheduledItems');
+          console.log('  → Modal should be open, waiting for user choice');
+        }
+        
         setGhostPosition(null);
       }
     } else if (activeData.type === 'scheduled') {
@@ -1673,30 +2513,77 @@ function App() {
         finalMinutes = Math.max(0, Math.min(snappedMinutes, totalMinutes - MINUTES_PER_SLOT));
       }
 
-      // Create updated event object
-      const updatedItem = { ...item, startMinutes: finalMinutes };
+      // Extract target dayKey from drop zone (if multi-day, allow cross-day moves)
+      const targetDayKey = over?.data?.current?.dayKey || item.dateKey || dateKey;
+      
+      // Create updated event object (may include new dateKey if dropped on different day)
+      const updatedItem = { 
+        ...item, 
+        startMinutes: finalMinutes,
+        dateKey: targetDayKey, // Update dateKey if moving to different day
+      };
       
       // ========================================
-      // CHECK FOR OVERLAPS (excluding the event being moved)
+      // APPLY MOVE POLICY: 'always' commits first, then optionally informs
       // ========================================
-      const otherEvents = scheduledItems.filter(e => e.id !== item.id);
-      const overlaps = checkOverlap(updatedItem, otherEvents);
-      
-      if (overlaps.length > 0) {
-        // Overlap detected - show modal for confirmation
-        setPendingEvent(updatedItem);
-        setOverlappingEvents(overlaps);
-        setShowOverlapModal(true);
-        setGhostPosition(null);
-      } else {
-        // No overlap - update position directly
+      if (MOVE_POLICY === 'always') {
+        // COMMIT THE MOVE IMMEDIATELY (no blocking confirmation)
         setScheduledItems((prev) =>
           prev.map((schedItem) =>
             schedItem.id === item.id
-              ? { ...schedItem, startMinutes: finalMinutes }
+              ? updatedItem
               : schedItem
           )
         );
+        setGhostPosition(null);
+        
+        // Optional: Check conflicts for informational purposes
+        if (CONFLICT_BEHAVIOR === 'inform') {
+          const candidate = {
+            id: updatedItem.id,
+            dateKey: updatedItem.dateKey,
+            startMinutes: updatedItem.startMinutes,
+            endMinutes: updatedItem.startMinutes + (updatedItem.duration || 30),
+          };
+          const occ = buildDayOccupancy(scheduledItems, updatedItem.id);
+          
+          if (isConflicting(candidate, occ)) {
+            const conflicts = listConflicts(scheduledItems, updatedItem, updatedItem.id);
+            setPendingEvent(null); // Not pending - already committed
+            setOverlappingEvents(conflicts);
+            setShowOverlapModal(true);
+          }
+        }
+      } else {
+        // LEGACY: confirm-then-commit policy (uses bitset conflict gate)
+        if (isCommittingRef.current) return;
+        isCommittingRef.current = true;
+        
+        assertNoConflictOrStageConfirm({
+          candidate: {
+            id: updatedItem.id,
+            dateKey: updatedItem.dateKey,
+            startMinutes: updatedItem.startMinutes,
+            endMinutes: updatedItem.startMinutes + (updatedItem.duration || 30),
+          },
+          events: scheduledItems,
+          setPendingAction: (action) => {
+            setPendingEvent(updatedItem);
+            setOverlappingEvents(action.neighbors);
+          },
+          openConflictModal: () => setShowOverlapModal(true),
+          onCommitSafe: () => {
+            setScheduledItems((prev) =>
+              prev.map((schedItem) =>
+                schedItem.id === item.id
+                  ? updatedItem
+                  : schedItem
+              )
+            );
+          },
+          isCommittingRef,
+        });
+        
         setGhostPosition(null);
       }
     }
@@ -1728,6 +2615,8 @@ function App() {
     <DndContext
       sensors={sensors}
       collisionDetection={closestCenter}
+      autoScroll={false}
+      modifiers={[restrictToWindowEdges]}
       onDragStart={handleDragStart}
       onDragMove={handleDragMove}
       onDragEnd={handleDragEnd}
@@ -1737,69 +2626,73 @@ function App() {
         isResizing={isResizing}
       />
       
-      <div className="flex h-screen bg-gray-50">
+      {/* UI State Monitor: Track drag hover namespace */}
+      <DndMonitorBridge />
+      
+      <div className="flex flex-col h-screen bg-gray-50">
         {/* ========================================
-            LEFT PANEL: Custom Event Templates
+            HEADER: Hamburger + Controls
         ======================================== */}
-        <div className="w-1/3 bg-gray-100 p-6 border-r border-gray-300 overflow-y-auto">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-2xl font-bold text-gray-800">TimeBlocks</h2>
-            <div className="flex gap-2">
-              {/* Types Manager Button */}
-              <button
-                onClick={handleOpenTypesManager}
-                className="bg-gray-600 text-white px-3 py-2 rounded hover:bg-gray-700 transition-colors shadow text-sm font-medium"
-                title="Manage Types"
-              >
-                Types
-              </button>
-              {/* Create Event Button */}
-              <button
-                onClick={handleCreateTemplate}
-                className="bg-blue-600 text-white w-10 h-10 rounded-full flex items-center justify-center hover:bg-blue-700 transition-colors shadow-lg text-xl font-bold"
-                title="Create New Event Template"
-              >
-                +
-              </button>
-            </div>
+        <header className="shrink-0 bg-white border-b border-gray-300 px-4 py-3">
+          <div className="flex items-center gap-3">
+            <HamburgerButton />
+            <h2 className="text-xl font-bold text-gray-800">TimeBlocks</h2>
           </div>
-          
-          {taskTemplates.length === 0 ? (
-            <div className="bg-white rounded-lg shadow p-6 text-center text-gray-500">
-              <p className="mb-4">No event templates yet!</p>
-              <p className="text-sm">Click the <strong className="text-blue-600">+</strong> button above to create your first event template.</p>
-            </div>
-          ) : (
-          <div className="space-y-4">
-              {taskTemplates.map((task) => (
-                <DraggableTaskBlock 
-                  key={task.id} 
-                  task={task} 
-                  onEdit={handleEditTemplate}
-                  onDelete={handleDeleteTemplate}
-                  types={types}
-                />
-            ))}
-          </div>
-          )}
-          
-          {/* Instructions */}
-          <div className="mt-8 p-4 bg-white rounded-lg shadow text-sm text-gray-600">
-            <p className="font-semibold mb-2">How to use:</p>
-            <ul className="list-disc list-inside space-y-1">
-              <li>Click <strong>Types</strong> to manage event categories</li>
-              <li>Click <strong>+</strong> to create event templates</li>
-              <li>Click template to edit, trash icon to delete</li>
-              <li>Drag templates to schedule on calendar</li>
-              <li>Ctrl+Scroll to zoom calendar</li>
-            </ul>
-          </div>
-        </div>
+        </header>
+        
+        {/* ========================================
+            APP GRID LAYOUT (CSS Grid with var(--sidebar-w))
+        ======================================== */}
+        <div className="app-grid flex-1 relative">
+          {/* LEFT SIDEBAR: Custom Event Templates */}
+          <aside className="sidebar relative flex flex-col h-full bg-gray-100 overflow-hidden">
+            <LeftPaneHeader
+              onOpenCreateEvent={handleCreateTemplate}
+              onOpenTypes={handleOpenTypesManager}
+            />
 
-        {/* ========================================
-            RIGHT PANEL: Calendar
-        ======================================== */}
-        <div className="w-2/3 overflow-y-auto" id="calendar-container">
+            {/* Scrollable events list area */}
+            <div className="flex-1 overflow-y-auto">
+              <div className="p-6">
+                {taskTemplates.length === 0 ? (
+                <div className="bg-white rounded-lg shadow p-6 text-center text-gray-500">
+                  <p className="mb-4">No event templates yet!</p>
+                  <p className="text-sm">Click the <strong className="text-blue-600">+</strong> button above to create your first event template.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {taskTemplates.map((task) => (
+                    <DraggableTaskBlock 
+                      key={task.id} 
+                      task={task} 
+                      onEdit={handleEditTemplate}
+                      onDelete={handleDeleteTemplate}
+                      types={types}
+                    />
+                  ))}
+                </div>
+              )}
+          
+              {/* Instructions */}
+              <div className="mt-8 p-4 bg-white rounded-lg shadow text-sm text-gray-600">
+                <p className="font-semibold mb-2">How to use:</p>
+                <ul className="list-disc list-inside space-y-1">
+                  <li>Click <strong>Types</strong> to manage event categories</li>
+                  <li>Click <strong>+</strong> to create event templates</li>
+                  <li>Click template to edit, trash icon to delete</li>
+                  <li>Drag templates to schedule on calendar</li>
+                  <li>Ctrl+Scroll to zoom calendar</li>
+                </ul>
+              </div>
+              </div>
+            </div>
+
+            {/* Resize Handle */}
+            <SidebarResizeHandle onPointerDown={onPointerDown} />
+          </aside>
+
+          {/* RIGHT MAIN: Calendar */}
+          <main className="main-area h-full overflow-y-auto" id="calendar-container">
           <div className="p-6">
             <div className="mb-4">
               {/* View Mode + Weekend Controls */}
@@ -1859,17 +2752,44 @@ function App() {
                 <span className="opacity-80"> Schedule</span>
               </h2>
             </div>
-            <CalendarGrid 
-              scheduledItems={scheduledItems} 
-              ghostPosition={ghostPosition} 
-              pixelsPerSlot={pixelsPerSlot}
-              onZoom={handleZoom}
-              calendarDomRef={calendarDomRef}
-              resizeDraft={isResizing ? resizeDraft : null}
-              onResizeStart={(item, edge, clientY) => handleResizeStart(item, edge, clientY)}
-              isResizing={isResizing}
+            
+            {/* Multi-column calendar grid */}
+            <MultiDayCalendar
+              days={displayedDays}
+              CalendarGrid={CalendarGrid}
+              gridProps={{
+                scheduledItems: scheduledItems, // Still pass for backward compat, but getEventsForDay is primary
+                ghostPosition: ghostPosition,
+                pixelsPerSlot: pixelsPerSlot,
+                onZoom: handleZoom,
+                calendarDomRef: calendarDomRef,
+                resizeDraft: isResizing ? resizeDraft : null,
+                onResizeStart: (item, edge, clientY) => handleResizeStart(item, edge, clientY),
+                isResizing: isResizing,
+                conflictUi: conflictUi, // Pass conflict UI state (includes live conflict flag)
+              }}
+              getEventsForDay={(dayKey) => {
+                // Get events from store for this day, plus legacy events from scheduledItems
+                const storeEvents = getEventsForDate(dayKey);
+                const legacyEvents = scheduledItems.filter(item => 
+                  item.dateKey === dayKey || (!item.dateKey && dayKey === visibleKeys[0])
+                );
+                return [...storeEvents, ...legacyEvents];
+              }}
+              onDropToDay={(day, payload) => {
+                // Cross-day drop handling is done in handleDragEnd via over.data.current.dayKey
+                // This callback is available for future enhancements
+              }}
+              onResizeOnDay={(day, payload) => {
+                // Day-scoped resize handling
+                // Already handled in handleResizeEnd
+              }}
             />
-          </div>
+                </div>
+              </main>
+
+          {/* Drag Proxy: Follows cursor during resize */}
+          <DragProxy x={proxyState.x} visible={proxyState.visible} />
         </div>
       </div>
 
@@ -1904,30 +2824,56 @@ function App() {
 
       {/* ========================================
           OVERLAP CONFIRMATION MODAL
+          Supports both blocking (pendingEvent exists) and informational (pendingEvent null) modes
       ======================================== */}
       <Modal
         isOpen={showOverlapModal}
-        title="⚠️ Time Conflict Detected"
+        title={pendingEvent ? "⚠️ Time Conflict Detected" : "ℹ️ Overlap Detected"}
         onConfirm={handleConfirmOverlap}
         onCancel={handleCancelOverlap}
+        confirmText={pendingEvent ? "Schedule Anyway" : "OK"}
+        cancelText={pendingEvent ? "Cancel" : null}
       >
         <div className="space-y-3">
-          <p>
-            The event <strong className="text-gray-800">"{pendingEvent?.label}"</strong> overlaps with the following {overlappingEvents.length > 1 ? 'events' : 'event'}:
-          </p>
-          <ul className="list-disc list-inside space-y-1 bg-yellow-50 border border-yellow-200 rounded p-3">
-            {overlappingEvents.map((event) => {
-              const endTime = event.startMinutes + (event.duration || 30);
-              return (
-                <li key={event.id} className="text-sm">
-                  <strong>{event.label}</strong> ({formatTime(event.startMinutes)} - {formatTime(endTime)})
-                </li>
-              );
-            })}
-          </ul>
-          <p className="text-sm">
-            Do you want to schedule this event anyway?
-          </p>
+          {pendingEvent ? (
+            <>
+              <p>
+                The event <strong className="text-gray-800">"{pendingEvent?.label}"</strong> overlaps with the following {overlappingEvents.length > 1 ? 'events' : 'event'}:
+              </p>
+              <ul className="list-disc list-inside space-y-1 bg-yellow-50 border border-yellow-200 rounded p-3">
+                {overlappingEvents.map((event) => {
+                  const endTime = event.startMinutes + (event.duration || 30);
+                  return (
+                    <li key={event.id} className="text-sm">
+                      <strong>{event.label}</strong> ({formatTime(event.startMinutes)} - {formatTime(endTime)})
+                    </li>
+                  );
+                })}
+              </ul>
+              <p className="text-sm">
+                Do you want to schedule this event anyway?
+              </p>
+            </>
+          ) : (
+            <>
+              <p>
+                The event was moved successfully, but it now overlaps with {overlappingEvents.length > 1 ? 'these events' : 'this event'}:
+              </p>
+              <ul className="list-disc list-inside space-y-1 bg-blue-50 border border-blue-200 rounded p-3">
+                {overlappingEvents.map((event) => {
+                  const endTime = event.startMinutes + (event.duration || 30);
+                  return (
+                    <li key={event.id} className="text-sm">
+                      <strong>{event.label}</strong> ({formatTime(event.startMinutes)} - {formatTime(endTime)})
+                    </li>
+                  );
+                })}
+              </ul>
+              <p className="text-sm text-gray-600">
+                You can adjust the times manually if needed.
+              </p>
+            </>
+          )}
         </div>
       </Modal>
 

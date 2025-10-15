@@ -68,6 +68,18 @@ const TASK_TEMPLATES = [
 
 To change calendar hours, modify `START_HOUR` and `END_HOUR` constants.
 
+## Development
+
+### Dev console noise: "The message port closed before a response was received"
+
+In Chrome, this warning typically comes from an extension (React DevTools, password managers, ad blockers) when a message port closes early.  
+
+We install a **dev-only** filter that hides just this line and prints a one-time diagnostic hint if `chrome-extension://` appears in the stack.  
+
+**Production builds are unaffected.** To fully eliminate the warning, disable or remove the offending extension.
+
+The filter is installed automatically in `src/main.jsx` and only active in development mode.
+
 ## License
 
 MIT - Free to use and modify

@@ -5,10 +5,19 @@ import { minutesToPixels, formatTime, snapToIncrement } from '../../utils/time';
 // PHASE 2 FIX: Separate component that doesn't call useDraggable
 // ========================================
 
-export default function ScheduledItemPreview({ item, pixelsPerSlot }) {
+export default function ScheduledItemPreview({ 
+  item, 
+  pixelsPerSlot, 
+  isConflicting = false,
+  layoutStyle = { leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 },
+  showDebug = false,
+}) {
   const topPosition = minutesToPixels(item.startMinutes, pixelsPerSlot);
   const duration = item.duration || 30;
   const height = minutesToPixels(duration, pixelsPerSlot);
+  
+  // Extract layout positioning
+  const { leftPct, widthPct, columnIndex, overlapCount } = layoutStyle;
   
   // For display during resize, show nearest snapped times
   // This doesn't affect the actual draft values, only the label
@@ -18,13 +27,23 @@ export default function ScheduledItemPreview({ item, pixelsPerSlot }) {
 
   return (
     <div
-      className={`absolute left-20 right-2 ${item.color} text-white px-3 py-2 rounded shadow-lg z-10 flex flex-col justify-between overflow-visible`}
+      className={`absolute ${item.color} text-white px-3 py-2 rounded shadow-lg z-10 flex flex-col justify-between overflow-visible ${isConflicting ? 'ring-2 ring-red-500/70 bg-red-900/20' : ''}`}
       style={{
         top: `${topPosition}px`,
         height: `${height}px`,
+        left: `${leftPct}%`,
+        width: `${widthPct}%`,
       }}
       data-preview="true"
+      data-conflicting={isConflicting}
     >
+      {/* Optional debug label */}
+      {showDebug && (
+        <div className="absolute top-0 right-0 text-[10px] bg-black/40 px-1 rounded-bl pointer-events-none">
+          col {columnIndex} / {overlapCount}
+        </div>
+      )}
+      
       <div>
         <div className="font-semibold text-sm">{item.label}</div>
         <div className="text-xs opacity-90">

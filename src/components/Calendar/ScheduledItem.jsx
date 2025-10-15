@@ -7,7 +7,16 @@ import { minutesToPixels, formatTime } from '../../utils/time';
 // COMPONENT: ScheduledItem (task placed in calendar)
 // ========================================
 
-export default function ScheduledItem({ item, pixelsPerSlot, onResizeStart, isBeingResized = false, isResizing = false }) {
+export default function ScheduledItem({ 
+  item, 
+  pixelsPerSlot, 
+  onResizeStart, 
+  isBeingResized = false, 
+  isResizing = false, 
+  isConflicting = false,
+  layoutStyle = { leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 },
+  showDebug = false,
+}) {
   // PHASE 1 DIAGNOSTIC: Track this render
   trackScheduledItemRender(item.id);
 
@@ -56,16 +65,33 @@ export default function ScheduledItem({ item, pixelsPerSlot, onResizeStart, isBe
   const duration = item.duration || 30; // Default to 30 minutes if not specified
   const height = minutesToPixels(duration, pixelsPerSlot);
   
+  // Extract layout positioning (Google Calendar-style horizontal layout)
+  const { leftPct, widthPct, columnIndex, overlapCount } = layoutStyle;
+  
+  // Debug log for first render
+  React.useEffect(() => {
+    console.log(`📍 ScheduledItem ${item.id} layout:`, {
+      label: item.label,
+      layoutStyle,
+      leftPct,
+      widthPct,
+    });
+  }, [item.id, leftPct, widthPct]);
+  
   // Apply transform for dragging
   // CRITICAL: Only apply transform when actually dragging AND drag is allowed
   const style = {
     top: `${topPosition}px`,
     height: `${height}px`,
+    left: `${leftPct}%`,
+    width: `${widthPct}%`,
     transform: (isDragging && allowDrag && transform) 
       ? `translate3d(${transform.x}px, ${transform.y}px, 0)` 
       : undefined, // Gate transform to prevent animation during resize
     opacity: (isDragging && allowDrag) ? 0.3 : 1,
   };
+  
+  console.log(`🎨 ScheduledItem ${item.id} style:`, style);
 
   // Calculate end time for display
   const endMinutes = item.startMinutes + duration;
@@ -75,11 +101,19 @@ export default function ScheduledItem({ item, pixelsPerSlot, onResizeStart, isBe
       ref={setNodeRef}
       {...attributes}
       {...listenersOnState}  // StackOverflow pattern: only spread when allowDrag=true
-      className={`absolute left-20 right-2 ${item.color} text-white px-3 py-2 rounded shadow-lg ${allowDrag ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'} z-10 flex flex-col justify-between overflow-visible`}
+      className={`absolute ${item.color} text-white px-3 py-2 rounded shadow-lg ${allowDrag ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'} z-10 flex flex-col justify-between overflow-visible ${isConflicting ? 'ring-2 ring-red-500/70 bg-red-900/20' : ''}`}
       style={style}
       data-event-id={item.id}
       data-allow-drag={allowDrag}
+      data-conflicting={isConflicting}
     >
+      {/* Optional debug label showing column/overlap info */}
+      {showDebug && (
+        <div className="absolute top-0 right-0 text-[10px] bg-black/40 px-1 rounded-bl pointer-events-none">
+          col {columnIndex} / {overlapCount}
+        </div>
+      )}
+      
       <div>
       <div className="font-semibold text-sm">{item.label}</div>
         <div className="text-xs opacity-90">
