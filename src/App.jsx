@@ -16,7 +16,7 @@
  * - All existing drag/drop/zoom logs
  */
 
-import React, { useState, useSyncExternalStore } from 'react';
+import React, { useState, useSyncExternalStore, useMemo } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -28,7 +28,7 @@ import {
 } from '@dnd-kit/core';
 import { format } from 'date-fns';
 import { dateStore } from './state/dateStore';
-import DateNav from './components/DateNav';
+import DateStrip from './components/DateStrip';
 
 // ========================================
 // PHASE 1 DIAGNOSTICS - Duplicate Draggable Detection
@@ -1088,9 +1088,18 @@ function App() {
   // DATE STORE
   // ========================================
   
-  const { selectedDate, weekStartsOn } = useDateStore();
-  const { nextDay, prevDay, setDate, goToday } = dateStore.actions;
-  const dateKey = dateStore.utils.getDateKey();
+  const { selectedDate, weekStartsOn, viewMode, includeWeekends } = useDateStore();
+  const { setDate, setViewMode, setIncludeWeekends, nextWindow, prevWindow, goToday } = dateStore.actions;
+  const { getDisplayedDays, getVisibleKeys, getDateKey } = dateStore.utils;
+  
+  const displayedDays = useMemo(() => getDisplayedDays(), [selectedDate, viewMode, includeWeekends]);
+  const visibleKeys = useMemo(() => getVisibleKeys(), [selectedDate, viewMode, includeWeekends]);
+  const dateKey = getDateKey();
+  
+  // When a specific slot's date changes via a menu, re-anchor to that date
+  const handleChangeDay = (index, newDate) => {
+    setDate(newDate);
+  };
   
   // ========================================
   // STATE INITIALIZATION WITH DEMO DATA
@@ -1792,23 +1801,63 @@ function App() {
         ======================================== */}
         <div className="w-2/3 overflow-y-auto" id="calendar-container">
           <div className="p-6">
-            <div className="mb-4 flex items-center justify-between">
-              {/* Date Navigation */}
-              <div className="flex items-center gap-4">
-                <DateNav
-                  value={selectedDate}
-                  onChange={setDate}
-                  onPrev={prevDay}
-                  onNext={nextDay}
+            <div className="mb-4">
+              {/* View Mode + Weekend Controls */}
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-3">
+                  <select
+                    value={viewMode}
+                    onChange={(e) => setViewMode(e.target.value)}
+                    className="rounded-md border border-gray-300 bg-white text-gray-900 px-3 py-1.5 text-sm font-medium shadow-sm hover:bg-gray-50 transition"
+                  >
+                    <option value="day">Day</option>
+                    <option value="3day">3-Day</option>
+                    <option value="week">Week (Mon–Fri)</option>
+                  </select>
+
+                  <label className="flex items-center gap-2 text-sm text-gray-700 font-medium">
+                    <input
+                      type="checkbox"
+                      checked={includeWeekends}
+                      onChange={(e) => setIncludeWeekends(e.target.checked)}
+                      className="accent-blue-600 w-4 h-4"
+                    />
+                    Include weekends
+                  </label>
+                </div>
+                
+                {/* Zoom Info */}
+                <span className="text-sm font-normal text-gray-600">
+                  Zoom: {((pixelsPerSlot / DEFAULT_PIXELS_PER_SLOT) * 100).toFixed(0)}% 
+                  <span className="ml-2 text-xs text-gray-500">(Ctrl+Scroll to zoom)</span>
+                </span>
+              </div>
+              
+              {/* Multi-menu date strip */}
+              <div className="mb-3">
+                <DateStrip
+                  days={displayedDays}
+                  onChangeDay={handleChangeDay}
+                  onPrevWindow={prevWindow}
+                  onNextWindow={nextWindow}
                   onToday={goToday}
+                  viewMode={viewMode}
                 />
               </div>
               
-              {/* Zoom Info */}
-              <span className="text-sm font-normal text-gray-600">
-                Zoom: {((pixelsPerSlot / DEFAULT_PIXELS_PER_SLOT) * 100).toFixed(0)}% 
-                <span className="ml-2 text-xs text-gray-500">(Ctrl+Scroll to zoom)</span>
-              </span>
+              {/* Date Range Header */}
+              <h2 className="text-2xl font-bold text-gray-800">
+                {displayedDays.length > 1 ? (
+                  <>
+                    {format(displayedDays[0], 'EEE, MMM d')} – {format(displayedDays[displayedDays.length - 1], 'EEE, MMM d, yyyy')}
+                  </>
+                ) : (
+                  <>
+                    {format(displayedDays[0], 'EEE, MMM d, yyyy')}
+                  </>
+                )}
+                <span className="opacity-80"> Schedule</span>
+              </h2>
             </div>
             <CalendarGrid 
               scheduledItems={scheduledItems} 
