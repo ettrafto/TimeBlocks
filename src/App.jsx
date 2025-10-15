@@ -16,7 +16,7 @@
  * - All existing drag/drop/zoom logs
  */
 
-import React, { useState } from 'react';
+import React, { useState, useSyncExternalStore } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -26,6 +26,9 @@ import {
   closestCenter,
   useDndMonitor,
 } from '@dnd-kit/core';
+import { format } from 'date-fns';
+import { dateStore } from './state/dateStore';
+import DateNav from './components/DateNav';
 
 // ========================================
 // PHASE 1 DIAGNOSTICS - Duplicate Draggable Detection
@@ -749,19 +752,6 @@ function ScheduledItem({ item, pixelsPerSlot, onResizeStart, isBeingResized = fa
   // DEBUG: Comprehensive logging
   React.useEffect(() => {
     const willApplyTransform = isDragging && allowDrag && !!transform;
-    const sensorsMode = isResizing || isBeingResized ? 'INERT' : 'NORMAL';
-    
-    console.log(`📊 ScheduledItem [${item.label}]:`, { 
-      id: item.id,
-      isBeingResized,
-      isResizing,
-      allowDrag,
-      disabled: !allowDrag,
-      listenersAttached: !!listenersOnState,
-      isDragging,
-      willApplyTransform,
-      sensorsMode,
-    });
     
     // WARNING: isDragging should be false when ANY resize is active
     if ((isBeingResized || isResizing) && isDragging) {
@@ -809,16 +799,6 @@ function ScheduledItem({ item, pixelsPerSlot, onResizeStart, isBeingResized = fa
       style={style}
       data-event-id={item.id}
       data-allow-drag={allowDrag}
-      onClick={(e) => {
-        console.log('🖱️ Event body clicked:', {
-          itemId: item.id,
-          label: item.label,
-          isBeingResized,
-          allowDrag,
-          listenersAttached: !!listenersOnState,
-          target: e.target.tagName,
-        });
-      }}
     >
       <div>
       <div className="font-semibold text-sm">{item.label}</div>
@@ -844,7 +824,6 @@ function ScheduledItem({ item, pixelsPerSlot, onResizeStart, isBeingResized = fa
             data-resize="start"
             className="absolute left-1/2 -translate-x-1/2 top-0 w-12 h-3 cursor-ns-resize hover:bg-white hover:bg-opacity-20 transition-colors z-20 -mt-1 rounded-t"
             onMouseDown={(e) => {
-              console.log('🎯 Top resize handle clicked');
               e.stopPropagation();
               e.preventDefault();
               onResizeStart(item, 'start', e.clientY);
@@ -859,7 +838,6 @@ function ScheduledItem({ item, pixelsPerSlot, onResizeStart, isBeingResized = fa
             data-resize="end"
             className="absolute left-1/2 -translate-x-1/2 bottom-0 w-12 h-3 cursor-ns-resize hover:bg-white hover:bg-opacity-20 transition-colors z-20 -mb-1 rounded-b"
             onMouseDown={(e) => {
-              console.log('🎯 Bottom resize handle clicked');
               e.stopPropagation();
               e.preventDefault();
               onResizeStart(item, 'end', e.clientY);
@@ -941,11 +919,6 @@ function CalendarGrid({ scheduledItems, ghostPosition, pixelsPerSlot, onZoom, ca
       );
       
       if (newPixelsPerSlot !== pixelsPerSlot) {
-        console.log('🔍 Zoom:', {
-          from: `${pixelsPerSlot.toFixed(1)}px/slot`,
-          to: `${newPixelsPerSlot.toFixed(1)}px/slot`,
-          percentage: `${((newPixelsPerSlot / DEFAULT_PIXELS_PER_SLOT) * 100).toFixed(0)}%`
-        });
         onZoom(newPixelsPerSlot);
       }
     }
@@ -977,11 +950,6 @@ function CalendarGrid({ scheduledItems, ghostPosition, pixelsPerSlot, onZoom, ca
     const newScrollTop = dragStart.scrollTop - deltaY;
     
     containerRef.current.parentElement.scrollTop = newScrollTop;
-    
-    console.log('📜 Scroll drag:', {
-      deltaY: deltaY.toFixed(0),
-      scrollTop: newScrollTop.toFixed(0),
-    });
   }, [isDragging, dragStart]);
 
   const handleMouseUp = React.useCallback(() => {
@@ -1049,9 +1017,6 @@ function CalendarGrid({ scheduledItems, ghostPosition, pixelsPerSlot, onZoom, ca
       {scheduledItems
         .filter(item => {
           const isBeingResized = resizeDraft?.id === item.id;
-          if (isBeingResized) {
-            console.log(`🔄 CalendarGrid: Hiding real draggable for ${item.label} (${item.id}) - preview will show instead`);
-          }
           return !isBeingResized; // Don't render the real draggable when resizing
         })
         .map((item) => (
@@ -1091,17 +1056,6 @@ function CalendarGrid({ scheduledItems, ghostPosition, pixelsPerSlot, onZoom, ca
 function DndEventMonitor({ isResizing, resizeTarget, resizeDraft }) {
   useDndMonitor({
     onDragStart(event) {
-      console.log('🔔 DND MONITOR - onDragStart fired:', {
-        activeId: event.active.id,
-        activeType: event.active.data.current?.type,
-        isResizing,
-        resizeTargetId: resizeTarget?.id,
-        resizeDraftId: resizeDraft?.id,
-        activatorTarget: event.activatorEvent?.target?.tagName,
-        activatorClass: event.activatorEvent?.target?.className,
-        SHOULD_NOT_FIRE_DURING_RESIZE: isResizing,
-      });
-      
       if (isResizing) {
         console.error('🚨 CRITICAL: DnD sensor activated DURING resize! Sensors should be INERT.');
       }
@@ -1112,10 +1066,32 @@ function DndEventMonitor({ isResizing, resizeTarget, resizeDraft }) {
 }
 
 // ========================================
+// DATE STORE HOOK
+// ========================================
+
+// Subscribe to date store (tiny external-store pattern)
+function useDateStore() {
+  const snapshot = useSyncExternalStore(
+    dateStore.subscribe,
+    dateStore.get,
+    dateStore.get
+  );
+  return { ...snapshot, ...dateStore.actions, utils: dateStore.utils };
+}
+
+// ========================================
 // MAIN APP COMPONENT
 // ========================================
 
 function App() {
+  // ========================================
+  // DATE STORE
+  // ========================================
+  
+  const { selectedDate, weekStartsOn } = useDateStore();
+  const { nextDay, prevDay, setDate, goToday } = dateStore.actions;
+  const dateKey = dateStore.utils.getDateKey();
+  
   // ========================================
   // STATE INITIALIZATION WITH DEMO DATA
   // ========================================
@@ -1178,17 +1154,10 @@ function App() {
   // Ref: Track if window listeners are attached (prevent duplicate attachment)
   const resizeListenersAttached = React.useRef(false);
 
-  // DEBUG: Track resize state changes
+  // Update global resize state for duplicate detection
   React.useEffect(() => {
-    console.log('🔄 RESIZE STATE CHANGED:', {
-      isResizing,
-      resizeTargetId: resizeTarget?.id,
-      resizeDraftId: resizeDraft?.id,
-      timestamp: new Date().toISOString().split('T')[1],
-    });
-    // Update global resize state for duplicate detection
     setResizingState(isResizing);
-  }, [isResizing, resizeTarget, resizeDraft]);
+  }, [isResizing]);
 
   // MOVED TO DndEventMonitor COMPONENT (must be child of DndContext)
 
@@ -1208,15 +1177,6 @@ function App() {
     })
   );
   
-  // Log sensor mode changes
-  React.useEffect(() => {
-    console.log('🎛️ DndContext sensors:', useInert ? 'INERT (disabled)' : 'NORMAL (active)', {
-      isResizing,
-      hasResizeTarget: !!resizeTarget,
-      hasResizeDraft: !!resizeDraft,
-      activationDistance: useInert ? 999999 : 8,
-    });
-  }, [useInert, isResizing, resizeTarget, resizeDraft]);
 
   // ========================================
   // ZOOM HANDLER
@@ -1241,18 +1201,14 @@ function App() {
     if (existingType) {
       // Update existing type
       setTypes(prev => prev.map(t => t.id === typeData.id ? typeData : t));
-      console.log('✏️ Updated type:', typeData.name);
     } else {
       // Create new type
       setTypes(prev => [...prev, typeData]);
-      console.log('➕ Created type:', typeData.name);
     }
   };
   
   // Delete type
-  const handleDeleteType = (typeId, affectedCount) => {
-    console.log(`🗑️ Deleted type: ${typeId} - affected events: ${affectedCount}`);
-    
+  const handleDeleteType = (typeId) => {
     // Remove type from types list
     setTypes(prev => prev.filter(t => t.id !== typeId));
     
@@ -1290,11 +1246,9 @@ function App() {
       setTaskTemplates(prev => 
         prev.map(t => t.id === templateData.id ? templateData : t)
       );
-      console.log('✏️ Updated template:', templateData.name);
     } else {
       // Create new template
       setTaskTemplates(prev => [...prev, templateData]);
-      console.log('➕ Created template:', templateData.name);
     }
     
     setShowEventEditor(false);
@@ -1304,7 +1258,6 @@ function App() {
   // Delete event template
   const handleDeleteTemplate = (template) => {
     if (window.confirm(`Delete "${template.name}"? Scheduled instances will remain on the calendar.`)) {
-      console.log(`🗑️ Deleted event: ${template.id} name: ${template.name}`);
       setTaskTemplates(prev => prev.filter(t => t.id !== template.id));
       
       // If this was being edited, close the editor
@@ -1328,8 +1281,6 @@ function App() {
   // User confirms - add/update the pending event despite overlap
   const handleConfirmOverlap = React.useCallback(() => {
     if (pendingEvent) {
-      console.log('✅ User allowed overlap - processing event:', pendingEvent.label);
-      
       // Check if this is a new event or a repositioned existing event
       const isExistingEvent = scheduledItems.some(e => e.id === pendingEvent.id);
       
@@ -1355,36 +1306,22 @@ function App() {
     setOverlappingEvents([]);
     
     // CRITICAL: Also clear resize state if this was from a resize operation
-    console.log('🧹 Overlap Allow - clearing resize state:', {
-      BEFORE_isResizing: isResizing,
-      BEFORE_resizeTarget: resizeTarget?.id,
-      BEFORE_resizeDraft: resizeDraft?.id,
-    });
     setIsResizing(false);
     setResizeTarget(null);
     setResizeDraft(null);
-    console.log('  ✅ Overlap Allow complete - resize state cleared');
   }, [pendingEvent, scheduledItems, isResizing, resizeTarget, resizeDraft]);
   
   // User cancels - discard the pending event
   const handleCancelOverlap = React.useCallback(() => {
-    console.log('❌ User canceled - discarding event:', pendingEvent?.label);
-    
     // Close modal and clear pending state
     setShowOverlapModal(false);
     setPendingEvent(null);
     setOverlappingEvents([]);
     
     // CRITICAL: Also clear resize state if this was from a resize operation
-    console.log('🧹 Overlap Cancel - clearing resize state:', {
-      BEFORE_isResizing: isResizing,
-      BEFORE_resizeTarget: resizeTarget?.id,
-      BEFORE_resizeDraft: resizeDraft?.id,
-    });
     setIsResizing(false);
     setResizeTarget(null);
     setResizeDraft(null);
-    console.log('  ✅ Overlap Cancel complete - resize state cleared');
   }, [pendingEvent, isResizing, resizeTarget, resizeDraft]);
 
   // ========================================
@@ -1392,19 +1329,9 @@ function App() {
   // ========================================
   
   const handleResizeStart = React.useCallback((item, edge, clientY) => {
-    console.log('🔧 Resize START:', { 
-      event: item.label, 
-      edge, 
-      startTime: formatTime(item.startMinutes), 
-      itemId: item.id,
-      BEFORE_isResizing: isResizing,
-      BEFORE_activeId: activeId,
-    });
-    
     // CRITICAL FIX: Cancel any active drag that dnd-kit might have started
     // The sensor can capture mousedown before stopPropagation, causing isDragging=true
     if (activeId) {
-      console.log('  🛑 Canceling active drag (activeId:', activeId, ') to start resize');
       setActiveId(null);
     }
     
@@ -1419,7 +1346,6 @@ function App() {
     });
     // initial draft = current item
     setResizeDraft({ ...item });
-    console.log('  ✅ Resize state set → next render switches to INERT sensors');
   }, [isResizing, activeId]);
 
   const handleResizeMove = React.useCallback((clientY) => {
@@ -1476,40 +1402,24 @@ function App() {
 
     const updated = { ...resizeDraft, startMinutes: start, duration };
 
-    console.log('🔧 Resize END (SNAPPED):', {
-      event: updated.label,
-      newStart: formatTime(start),
-      newDuration: `${duration} min`,
-      snapped: 'Yes',
-    });
-
     // Overlap check excluding itself
     const others = scheduledItems.filter(e => e.id !== updated.id);
     const overlaps = checkOverlap(updated, others);
 
     if (overlaps.length > 0) {
-      console.log('⚠️ Resize creates overlap with:', overlaps.map(e => e.label).join(', '));
       setPendingEvent(updated);
       setOverlappingEvents(overlaps);
       setShowOverlapModal(true);
     } else {
-      console.log('✅ Resize applied:', updated.label);
       setScheduledItems(prev =>
         prev.map(it => it.id === updated.id ? updated : it)
       );
     }
 
     // Cleanup
-    console.log('🧹 Resize cleanup (normal path):', { 
-      BEFORE_isResizing: isResizing,
-      BEFORE_resizeTarget: resizeTarget?.id,
-      BEFORE_resizeDraft: resizeDraft?.id,
-      SETTING_TO: { isResizing: false, resizeTarget: null, resizeDraft: null }
-    });
     setIsResizing(false);
     setResizeTarget(null);
     setResizeDraft(null);
-    console.log('  ✅ Resize state cleared - events should be draggable now');
   }, [isResizing, resizeTarget, resizeDraft, scheduledItems]);
 
   // Attach window listeners for resize mouse events
@@ -1518,18 +1428,15 @@ function App() {
       handleResizeMove(e.clientY);
     }
     function onUp() {
-      console.log('🖱️ MOUSE UP detected - calling handleResizeEnd');
       handleResizeEnd();
       resizeListenersAttached.current = false;
     }
     
     if (isResizing && !resizeListenersAttached.current) {
-      console.log('📌 Attaching window resize listeners (mousemove, mouseup) - ONCE');
       resizeListenersAttached.current = true;
       window.addEventListener('mousemove', onMove);
       window.addEventListener('mouseup', onUp);
       return () => {
-        console.log('📌 Cleanup: removing resize listeners - ONCE');
         window.removeEventListener('mousemove', onMove);
         window.removeEventListener('mouseup', onUp);
         resizeListenersAttached.current = false;
@@ -1545,18 +1452,10 @@ function App() {
   // ========================================
 
   function handleDragStart(event) {
-    console.log('🎬 DRAG START ATTEMPT:', {
-      activeId: event.active.id,
-      isResizing,
-      resizeTargetId: resizeTarget?.id,
-      resizeDraftId: resizeDraft?.id,
-    });
-
     // ========================================
     // IGNORE DRAG START IF CURRENTLY RESIZING
     // ========================================
     if (isResizing) {
-      console.log('❌ BLOCKED: Drag start ignored - resize in progress');
       return;
     }
 
@@ -1569,16 +1468,6 @@ function App() {
       console.error('❌ DRAG START: No active data found');
       return;
     }
-    
-    console.log('✅ DRAG START ALLOWED:', {
-      id: event.active.id,
-      type: activeData?.type,
-      label: activeData?.task?.name || activeData?.task?.label || activeData?.item?.label || activeData?.item?.name,
-      hasTask: !!activeData.task,
-      hasItem: !!activeData.item,
-      currentIsResizing: isResizing,
-      disabled: activeData.disabled,
-    });
     
     setActiveId(event.active.id);
     setGhostPosition(null); // Clear any previous ghost
@@ -1605,11 +1494,6 @@ function App() {
       if (!over || over.id !== 'calendar') {
         setGhostPosition(null);
         return;
-      }
-    } else if (activeData.type === 'scheduled') {
-      // FIX: Scheduled drags proceed even if over is null/wrong (post-resize resilience)
-      if (!over || over.id !== 'calendar') {
-        console.log('  ℹ️ Scheduled drag: over is missing/wrong, using fallback calculation (normal after resize)');
       }
     }
     // For scheduled items, continue even if over is null (use delta.y from current position)
@@ -1688,18 +1572,6 @@ function App() {
       startMinutes: finalMinutes,
       task: taskInfo,
     });
-    
-    // Debug logging with duration info
-    const taskDuration = taskInfo.duration || 30;
-    const ghostHeight = minutesToPixels(taskDuration, pixelsPerSlot);
-    console.log('👻 Ghost preview:', {
-      time: formatTime(finalMinutes),
-      duration: `${taskDuration} min`,
-      height: `${ghostHeight}px`,
-      position: `${minutesToPixels(finalMinutes, pixelsPerSlot)}px from top`,
-      type: activeData.type,
-      zoom: `${pixelsPerSlot.toFixed(1)}px/slot`,
-    });
   }
 
   function handleDragEnd(event) {
@@ -1707,19 +1579,11 @@ function App() {
     // IGNORE DRAG END IF CURRENTLY RESIZING
     // ========================================
     if (isResizing) {
-      console.log('⚠️ Ignoring drag end - resize in progress');
       setActiveId(null);
       return;
     }
 
     const { active, over, delta } = event;
-    
-    console.log('🏁 DRAG END:', {
-      activeId: active?.id,
-      overId: over?.id,
-      activeType: active?.data?.current?.type,
-      deltaY: delta?.y,
-    });
     
     setActiveId(null);
 
@@ -1730,7 +1594,6 @@ function App() {
     if (activeData?.type === 'template') {
       // Templates must be dropped on calendar
       if (over?.id !== 'calendar') {
-        console.log('⚠️ Template not dropped on calendar, ignoring');
         setGhostPosition(null);
         return;
       }
@@ -1769,16 +1632,14 @@ function App() {
       
       if (overlaps.length > 0) {
         // Overlap detected - show modal for confirmation
-        console.log('⚠️ Overlap detected with:', overlaps.map(e => e.label).join(', '));
         setPendingEvent(newItem);
         setOverlappingEvents(overlaps);
         setShowOverlapModal(true);
         setGhostPosition(null);
       } else {
         // No overlap - add event directly
-        console.log(`✅ Placed "${task.name || task.label}" at ${formatTime(finalMinutes)} (${duration} min duration, height: ${minutesToPixels(duration, pixelsPerSlot)}px)`);
-      setScheduledItems((prev) => [...prev, newItem]);
-      setNextId((prev) => prev + 1);
+        setScheduledItems((prev) => [...prev, newItem]);
+        setNextId((prev) => prev + 1);
         setGhostPosition(null);
       }
     } else if (activeData.type === 'scheduled') {
@@ -1793,20 +1654,15 @@ function App() {
       if (ghostPosition) {
         // Use ghost position (normal path)
         finalMinutes = ghostPosition.startMinutes;
-        console.log('  ✓ Using ghost position for scheduled drag');
       } else {
         // Fallback: calculate from delta.y if ghost missing (post-resize collision detection miss)
-        console.log('  ⚠️ FALLBACK: No ghost - calculating from delta for scheduled drag (common post-resize)');
         const currentPixels = minutesToPixels(item.startMinutes, pixelsPerSlot);
-      const newPixels = currentPixels + delta.y;
+        const newPixels = currentPixels + delta.y;
         const newMinutes = pixelsToMinutes(newPixels, pixelsPerSlot);
-      const snappedMinutes = snapToIncrement(newMinutes);
-      const totalMinutes = (END_HOUR - START_HOUR) * 60;
+        const snappedMinutes = snapToIncrement(newMinutes);
+        const totalMinutes = (END_HOUR - START_HOUR) * 60;
         finalMinutes = Math.max(0, Math.min(snappedMinutes, totalMinutes - MINUTES_PER_SLOT));
-        console.log('  ✓ Calculated finalMinutes from delta:', formatTime(finalMinutes));
       }
-      
-      console.log('🔄 Repositioning event:', item.label, 'from', formatTime(item.startMinutes), 'to', formatTime(finalMinutes));
 
       // Create updated event object
       const updatedItem = { ...item, startMinutes: finalMinutes };
@@ -1819,21 +1675,19 @@ function App() {
       
       if (overlaps.length > 0) {
         // Overlap detected - show modal for confirmation
-        console.log('⚠️ Reposition would overlap with:', overlaps.map(e => e.label).join(', '));
         setPendingEvent(updatedItem);
         setOverlappingEvents(overlaps);
         setShowOverlapModal(true);
         setGhostPosition(null);
       } else {
         // No overlap - update position directly
-        console.log(`✅ Moved "${item.label}" to ${formatTime(finalMinutes)} (duration: ${item.duration || 30} min preserved)`);
-      setScheduledItems((prev) =>
-        prev.map((schedItem) =>
-          schedItem.id === item.id
-            ? { ...schedItem, startMinutes: finalMinutes }
-            : schedItem
-        )
-      );
+        setScheduledItems((prev) =>
+          prev.map((schedItem) =>
+            schedItem.id === item.id
+              ? { ...schedItem, startMinutes: finalMinutes }
+              : schedItem
+          )
+        );
         setGhostPosition(null);
       }
     }
@@ -1872,8 +1726,6 @@ function App() {
       {/* PHASE 1 DIAGNOSTIC: Monitor must be child of DndContext */}
       <DndEventMonitor 
         isResizing={isResizing}
-        resizeTarget={resizeTarget}
-        resizeDraft={resizeDraft}
       />
       
       <div className="flex h-screen bg-gray-50">
@@ -1882,7 +1734,7 @@ function App() {
         ======================================== */}
         <div className="w-1/3 bg-gray-100 p-6 border-r border-gray-300 overflow-y-auto">
           <div className="flex items-center justify-between mb-6">
-            <h2 className="text-2xl font-bold text-gray-800">Event Templates</h2>
+            <h2 className="text-2xl font-bold text-gray-800">TimeBlocks</h2>
             <div className="flex gap-2">
               {/* Types Manager Button */}
               <button
@@ -1940,13 +1792,24 @@ function App() {
         ======================================== */}
         <div className="w-2/3 overflow-y-auto" id="calendar-container">
           <div className="p-6">
-            <h2 className="text-2xl font-bold mb-4 text-gray-800 flex items-center justify-between">
-              <span>Daily Schedule ({START_HOUR}:00 AM - {END_HOUR > 12 ? END_HOUR - 12 : END_HOUR}:00 PM)</span>
+            <div className="mb-4 flex items-center justify-between">
+              {/* Date Navigation */}
+              <div className="flex items-center gap-4">
+                <DateNav
+                  value={selectedDate}
+                  onChange={setDate}
+                  onPrev={prevDay}
+                  onNext={nextDay}
+                  onToday={goToday}
+                />
+              </div>
+              
+              {/* Zoom Info */}
               <span className="text-sm font-normal text-gray-600">
                 Zoom: {((pixelsPerSlot / DEFAULT_PIXELS_PER_SLOT) * 100).toFixed(0)}% 
                 <span className="ml-2 text-xs text-gray-500">(Ctrl+Scroll to zoom)</span>
               </span>
-            </h2>
+            </div>
             <CalendarGrid 
               scheduledItems={scheduledItems} 
               ghostPosition={ghostPosition} 
