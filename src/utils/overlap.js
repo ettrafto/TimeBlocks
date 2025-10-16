@@ -72,13 +72,24 @@ export function computeEventLayout(events) {
 
   // Sort by:
   // 1. Time (ascending)
-  // 2. Type (ends before starts at same time)
+  // 2. Type (ends before starts to avoid false overlap at boundaries)
   // 3. Duration (shorter first for same start time)
-  points.sort((a, b) => 
-    (a.t - b.t) || 
-    (b.type - a.type) || 
-    (a.dur - b.dur)
-  );
+  points.sort((a, b) => {
+    // Primary: sort by time
+    if (a.t !== b.t) return a.t - b.t;
+
+    // Secondary: process ends (-1) before starts (+1) at same time
+    // This prevents A.end === B.start from being counted as overlap
+    if (a.type !== b.type) return a.type - b.type; // -1 < +1
+
+    // Tertiary: if both are starts at same time, shorter duration first (leftmost)
+    if (a.type === +1) {
+      return (a.dur || 0) - (b.dur || 0);
+    }
+
+    // If both are ends at same time, order doesn't matter
+    return 0;
+  });
 
   const active = new Set();       // Currently active event IDs
   const columns = [];             // Column slots (null = free, id = occupied)

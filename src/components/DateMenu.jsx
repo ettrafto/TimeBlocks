@@ -12,6 +12,7 @@ export default function DateMenu({
   onToday,    // () => void
   showArrows = true,
   showToday = true,
+  variant = 'interactive', // 'interactive' | 'static'
   className = '',
 }) {
   const [open, setOpen] = useState(false);
@@ -33,9 +34,19 @@ export default function DateMenu({
 
   const label = format(date, 'EEE, MMM d');
 
-  // Reversed styling to match DateNav
-  const btn = "rounded-lg border px-2 py-1 transition shadow-sm font-medium bg-gray-800/60 dark:bg-gray-800/60 border-gray-600 dark:border-gray-600 text-gray-100 dark:text-gray-100 hover:bg-transparent hover:border-gray-300 dark:hover:border-gray-600";
-  const bigBtn = "flex items-center gap-2 rounded-lg border px-3 py-2 transition shadow font-semibold bg-gray-800/60 dark:bg-gray-800/60 border-gray-600 dark:border-gray-600 text-gray-100 dark:text-gray-100 hover:bg-transparent hover:border-gray-300 dark:hover:border-gray-600";
+  // Split styles: base (visual appearance) vs interactive (hover, cursor)
+  const btnBase = "rounded-lg border px-2 py-1 transition shadow-sm font-medium bg-gray-800/60 dark:bg-gray-800/60 border-gray-600 dark:border-gray-600 text-gray-100 dark:text-gray-100";
+  const btnInteractive = "cursor-pointer hover:bg-transparent hover:border-gray-300 dark:hover:border-gray-600";
+  
+  const bigBtnBase = "flex items-center gap-2 rounded-lg border px-3 py-2 transition shadow font-semibold bg-gray-800/60 dark:bg-gray-800/60 border-gray-600 dark:border-gray-600 text-gray-100 dark:text-gray-100";
+  const bigBtnInteractive = "cursor-pointer hover:bg-transparent hover:border-gray-300 dark:hover:border-gray-600";
+  const bigBtnStatic = "cursor-default pointer-events-none";
+  
+  // Combine based on context
+  const btn = `${btnBase} ${btnInteractive}`;
+  const bigBtn = variant === 'interactive' 
+    ? `${bigBtnBase} ${bigBtnInteractive}`
+    : `${bigBtnBase} ${bigBtnStatic}`;
 
   return (
     <div ref={ref} className={`relative flex items-center justify-center gap-2 ${className}`}>
@@ -49,14 +60,28 @@ export default function DateMenu({
         </button>
       )}
 
-      <button
-        aria-label="Open date picker"
-        onClick={() => setOpen((v) => !v)}
-        className={bigBtn}
-      >
-        <span>{label}</span>
-        <span className="text-xs opacity-70">▼</span>
-      </button>
+      {/* Date trigger - interactive (with dropdown) or static (display only) */}
+      {variant === 'interactive' ? (
+        <button
+          aria-label="Open date picker"
+          onClick={() => setOpen((v) => !v)}
+          className={bigBtn}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+        >
+          <span>{label}</span>
+          <span className="text-xs opacity-70">▼</span>
+        </button>
+      ) : (
+        <span
+          className={bigBtn}
+          aria-disabled="true"
+          tabIndex={-1}
+        >
+          <span>{label}</span>
+          {/* Caret intentionally omitted in static mode */}
+        </span>
+      )}
 
       {showArrows && (
         <button
@@ -78,7 +103,8 @@ export default function DateMenu({
         </button>
       )}
 
-      {open && (
+      {/* Only show dropdown in interactive mode */}
+      {variant === 'interactive' && open && (
         <div className="absolute z-50 top-[110%] left-1/2 -translate-x-1/2 rounded-lg border border-gray-600 dark:border-gray-600 bg-white dark:bg-gray-900 p-4 shadow-2xl">
           <DayPicker
             mode="single"
