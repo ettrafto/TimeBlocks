@@ -13,6 +13,7 @@ export default function DateMenu({
   showArrows = true,
   showToday = true,
   variant = 'interactive', // 'interactive' | 'static'
+  hideLabel = false,  // Hide the date label but keep spacing
   className = '',
 }) {
   const [open, setOpen] = useState(false);
@@ -33,6 +34,11 @@ export default function DateMenu({
   }, [open]);
 
   const label = format(date, 'EEE, MMM d');
+
+  // If hideLabel is true, render empty spacer to maintain grid alignment
+  if (hideLabel) {
+    return <div className="h-10" aria-hidden="true" />;
+  }
 
   // Split styles: base (visual appearance) vs interactive (hover, cursor)
   const btnBase = "rounded-lg border px-2 py-1 transition shadow-sm font-medium bg-gray-800/60 dark:bg-gray-800/60 border-gray-600 dark:border-gray-600 text-gray-100 dark:text-gray-100";

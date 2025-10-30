@@ -72,12 +72,34 @@
   scrollbar-width: none;      /* Firefox */
 }
 
-body {
+html, body, #root {
+  height: 100%;
   margin: 0;
+  overflow: hidden;  /* Prevent page-level micro scroll */
+}
+
+body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
     'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Prevent overscroll bounce and micro-jiggle */
+* {
+  overscroll-behavior: none;
+}
+
+/* Calendar scroll container: prevent fractional pixel issues */
+#calendar-container {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Force box-sizing to include borders in dimensions */
+.calendar-grid-container,
+.calendar-grid-container * {
+  box-sizing: border-box;
 }
 

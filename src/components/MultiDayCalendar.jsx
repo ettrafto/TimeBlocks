@@ -29,7 +29,7 @@ export default function MultiDayCalendar({
     days.length === 3 ? 'grid-cols-3' : 'grid-cols-1';
 
   return (
-    <div className={`grid ${cols} gap-0 h-full rounded-lg border border-gray-300 bg-white divide-x divide-gray-300 overflow-hidden`}>
+    <div className={`grid ${cols} gap-0 h-full rounded-lg border border-gray-300 bg-white divide-x divide-gray-300 overflow-hidden box-border`}>
       {days.map((day, idx) => {
         const dayKey = formatISO(day, { representation: 'date' }); // YYYY-MM-DD
         const idNamespace = `day:${dayKey}`; // namespace for droppables/draggables
@@ -43,16 +43,16 @@ export default function MultiDayCalendar({
           });
 
         return (
-          <div key={dayKey} className="flex flex-col min-w-0">
-            {/* Day header */}
-            <div className="px-3 py-2 bg-gray-100 border-b border-gray-200">
+          <div key={dayKey} className="flex flex-col min-w-0 h-full overflow-hidden">
+            {/* Day header - fixed height to prevent jiggle */}
+            <div className="px-3 py-2 bg-gray-100 border-b border-gray-200 shrink-0 box-border">
               <h3 className="text-sm font-semibold text-gray-800 text-center">
                 {format(day, 'EEE, MMM d')}
               </h3>
             </div>
             
-            {/* Calendar grid for this day */}
-            <div className="flex-1 overflow-y-auto no-scrollbar">
+            {/* Calendar grid for this day - controlled height */}
+            <div className="flex-1 overflow-y-auto no-scrollbar box-border calendar-grid-container">
               <CalendarGrid
                 {...gridProps}
                 scheduledItems={dayItems} // Override with day-filtered items

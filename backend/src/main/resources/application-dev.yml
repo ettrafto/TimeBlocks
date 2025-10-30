@@ -1,0 +1,20 @@
+spring:
+  datasource:
+    url: jdbc:sqlite:./timeblocks-dev.sqlite
+    driver-class-name: org.sqlite.JDBC
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: com.timeblocks.sqlite.SQLiteDialect
+        jdbc.time_zone: UTC
+  flyway:
+    enabled: true
+    locations: classpath:db/migration/sqlite
+    baseline-on-migrate: true
+    mixed: true
+
+server:
+  port: 8080
+

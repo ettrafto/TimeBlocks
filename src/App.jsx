@@ -17,6 +17,7 @@
  */
 
 import React, { useState, useSyncExternalStore, useMemo } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   DndContext,
   DragOverlay,
@@ -27,16 +28,18 @@ import {
   useDndMonitor,
 } from '@dnd-kit/core';
 import { restrictToWindowEdges } from '@dnd-kit/modifiers';
-import { format } from 'date-fns';
+import { format, formatISO } from 'date-fns';
 import { dateStore } from './state/dateStore';
-import { eventsStore } from './state/eventsStore';
+import { eventsStore } from './state/eventsStoreWithBackend';
 import { uiStore } from './state/uiStore';
 import { layoutStore } from './state/layoutStore';
 import { MOVE_POLICY, CONFLICT_BEHAVIOR } from './config/policies';
 import DateStrip from './components/DateStrip';
 import MultiDayCalendar from './components/MultiDayCalendar';
-import HamburgerButton from './components/HamburgerButton';
+import TopNav from './components/TopNav';
 import { computeEventLayout } from './utils/overlap';
+import BackendTest from './pages/BackendTest';
+import { eventTypesApi, libraryEventsApi } from './services/api';
 
 // ========================================
 // PHASE 1 DIAGNOSTICS - Duplicate Draggable Detection
@@ -113,7 +116,8 @@ function pixelsToMinutes(pixels, pixelsPerSlot = DEFAULT_PIXELS_PER_SLOT) {
 // Convert time (minutes from start) to pixels - using dynamic slot height
 function minutesToPixels(minutes, pixelsPerSlot = DEFAULT_PIXELS_PER_SLOT) {
   const pixelsPerMinute = pixelsPerSlot / MINUTES_PER_SLOT;
-  return minutes * pixelsPerMinute;
+  // Round to integer to prevent sub-pixel jiggle
+  return Math.round(minutes * pixelsPerMinute);
 }
 
 // Snap minutes to nearest 15-minute increment
@@ -171,7 +175,7 @@ function checkOverlap(newEvent, existingEvents) {
 // ========================================
 
 // Debug flag - set to true to see conflict detection logs
-const DEBUG_CONFLICTS = true;
+const DEBUG_CONFLICTS = false;
 
 const SLOT_MIN = 15; // minutes per slot
 const DAY_SLOTS = Math.floor((24 * 60) / SLOT_MIN); // 96 slots per day
@@ -353,6 +357,138 @@ function generateTimeSlots() {
   }
   
   return slots;
+}
+
+// ========================================
+// CALENDAR POPOVER UTILITY FUNCTIONS
+// ========================================
+
+function startOfCalendarGrid(d) {
+  const first = new Date(d.getFullYear(), d.getMonth(), 1);
+  const day = first.getDay(); // 0-6
+  const start = new Date(first);
+  start.setDate(first.getDate() - day);
+  return start;
+}
+
+function addDays(d, n) {
+  const x = new Date(d);
+  x.setDate(x.getDate() + n);
+  return x;
+}
+
+function addMonths(d, n) {
+  const x = new Date(d);
+  x.setMonth(x.getMonth() + n);
+  return x;
+}
+
+function sameDay(a, b) {
+  if (!a || !b) return false;
+  return a.getFullYear() === b.getFullYear() && 
+         a.getMonth() === b.getMonth() && 
+         a.getDate() === b.getDate();
+}
+
+function formatActiveDay(d) {
+  return d?.toLocaleDateString?.(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+  }) ?? String(d);
+}
+
+// ========================================
+// COMPONENT: InlineCalendarPopover (for active day selector)
+// ========================================
+
+function InlineCalendarPopover({ monthStart, currentDate, onSelect, onClose, onMonthChange }) {
+  const start = startOfCalendarGrid(monthStart);
+  const days = Array.from({ length: 42 }, (_, i) => addDays(start, i));
+
+  // Handle keyboard navigation
+  React.useEffect(() => {
+    const handleEsc = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handleEsc);
+    return () => document.removeEventListener('keydown', handleEsc);
+  }, [onClose]);
+
+  return (
+    <div className="select-none">
+      {/* Month header with navigation */}
+      <div className="flex items-center justify-between mb-2">
+        <button
+          type="button"
+          className="px-2 py-1 rounded border border-gray-600 hover:bg-gray-700 text-xs text-gray-200"
+          onClick={() => onMonthChange(addMonths(monthStart, -1))}
+          aria-label="Previous month"
+        >
+          ‹
+        </button>
+        <div className="text-sm font-medium text-gray-200">
+          {monthStart.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
+        </div>
+        <button
+          type="button"
+          className="px-2 py-1 rounded border border-gray-600 hover:bg-gray-700 text-xs text-gray-200"
+          onClick={() => onMonthChange(addMonths(monthStart, 1))}
+          aria-label="Next month"
+        >
+          ›
+        </button>
+      </div>
+
+      {/* Weekday header */}
+      <div className="grid grid-cols-7 text-[11px] text-gray-400 mb-1">
+        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((w, i) => (
+          <div key={i} className="text-center py-1">{w}</div>
+        ))}
+      </div>
+
+      {/* Day grid */}
+      <div className="grid grid-cols-7 gap-1">
+        {days.map((d) => {
+          const isCurrentMonth = d.getMonth() === monthStart.getMonth();
+          const isSelected = sameDay(d, currentDate);
+          const isToday = sameDay(d, new Date());
+          
+          return (
+            <button
+              key={d.toISOString()}
+              type="button"
+              className={`h-8 rounded text-sm border transition ${
+                isSelected
+                  ? 'bg-blue-600 text-white border-blue-500'
+                  : isToday
+                  ? 'bg-gray-700 text-white border-gray-600'
+                  : isCurrentMonth
+                  ? 'hover:bg-gray-700 text-gray-200 border-transparent'
+                  : 'text-gray-500 hover:bg-gray-700/40 border-transparent'
+              }`}
+              onClick={() => onSelect(d)}
+              aria-label={d.toLocaleDateString()}
+            >
+              {d.getDate()}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Close button */}
+      <div className="mt-2 flex justify-end">
+        <button
+          type="button"
+          className="px-2 py-1 rounded border border-gray-600 hover:bg-gray-700 text-xs text-gray-200"
+          onClick={onClose}
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  );
 }
 
 // ========================================
@@ -861,7 +997,7 @@ function ScheduledItemPreview({
   const height = minutesToPixels(duration, pixelsPerSlot);
   const endMinutes = item.startMinutes + duration;
   
-  const { leftPct, widthPct, columnIndex, overlapCount } = layoutStyle;
+  const { leftPct, widthPct } = layoutStyle;
 
   return (
     <div
@@ -874,11 +1010,6 @@ function ScheduledItemPreview({
       }}
       data-preview="true"
     >
-      {showDebug && (
-        <div className="absolute top-0 right-0 text-[10px] bg-black/40 px-1 rounded-bl pointer-events-none">
-          col {columnIndex} / {overlapCount}
-        </div>
-      )}
       <div>
         <div className="font-semibold text-sm">{item.label}</div>
         <div className="text-xs opacity-90">
@@ -965,7 +1096,7 @@ function ScheduledItem({
   const height = minutesToPixels(duration, pixelsPerSlot);
   
   // Extract layout positioning
-  const { leftPct, widthPct, columnIndex, overlapCount } = layoutStyle;
+  const { leftPct, widthPct } = layoutStyle;
   
   // Apply transform for dragging
   // CRITICAL: Only apply transform when actually dragging AND drag is allowed
@@ -993,11 +1124,6 @@ function ScheduledItem({
       data-event-id={item.id}
       data-allow-drag={allowDrag}
     >
-      {showDebug && (
-        <div className="absolute top-0 right-0 text-[10px] bg-black/40 px-1 rounded-bl pointer-events-none">
-          col {columnIndex} / {overlapCount}
-        </div>
-      )}
       <div>
       <div className="font-semibold text-sm">{item.label}</div>
         <div className="text-xs opacity-90">
@@ -1072,7 +1198,7 @@ function GhostEvent({
   // Calculate end time for preview
   const endMinutes = startMinutes + duration;
   
-  const { leftPct, widthPct, columnIndex, overlapCount } = layoutStyle;
+  const { leftPct, widthPct } = layoutStyle;
 
   return (
     <div
@@ -1084,11 +1210,6 @@ function GhostEvent({
         width: `${widthPct}%`,
       }}
     >
-      {showDebug && (
-        <div className="absolute top-0 right-0 text-[10px] bg-black/40 px-1 rounded-bl">
-          col {columnIndex} / {overlapCount}
-        </div>
-      )}
       <div className="text-gray-700 text-sm font-medium">
         {task.label}
       </div>
@@ -1126,7 +1247,8 @@ function CalendarGrid({
   onDrop,
 }) {
   const timeSlots = generateTimeSlots();
-  const calendarHeight = (END_HOUR - START_HOUR) * 60 * (pixelsPerSlot / MINUTES_PER_SLOT);
+  // Round to integer pixels to prevent sub-pixel jiggle
+  const calendarHeight = Math.round((END_HOUR - START_HOUR) * 60 * (pixelsPerSlot / MINUTES_PER_SLOT));
   
   const containerRef = React.useRef(null);
   const [isDragging, setIsDragging] = React.useState(false);
@@ -1151,7 +1273,7 @@ function CalendarGrid({
     return result;
   }, [scheduledItems]);
   
-  const showDebugLabels = true; // Show debug labels to verify layout
+  const showDebugLabels = false; // Debug labels hidden
 
   // Make the entire calendar a droppable zone
   // Use namespaced ID if provided (multi-day), otherwise 'calendar' (single-day backward compat)
@@ -1247,8 +1369,12 @@ function CalendarGrid({
       }}
       data-droppable-id={droppableId}
       data-day-key={dayKey || 'default'}
-      className={`relative bg-white ${!idNamespace ? 'border-l border-gray-300' : ''} ${isDragging ? 'cursor-grabbing' : 'cursor-default'} no-scrollbar overflow-x-hidden overscroll-x-contain touch-pan-y`}
-      style={{ height: `${calendarHeight}px`, touchAction: 'pan-y' }}
+      className={`relative bg-white ${!idNamespace ? 'border-l border-gray-300' : ''} ${isDragging ? 'cursor-grabbing' : 'cursor-default'} no-scrollbar overflow-hidden box-border`}
+      style={{ 
+        height: `${calendarHeight}px`, 
+        touchAction: 'pan-y',
+        contain: 'layout paint size',
+      }}
       onMouseDown={handleMouseDown}
       onWheel={(e) => {
         // Suppress horizontal wheel gestures to prevent panning
@@ -1708,11 +1834,37 @@ function App() {
   // STATE INITIALIZATION WITH DEMO DATA
   // ========================================
   
-  // State: Types (categories for events) - seeded with demo data
-  const [types, setTypes] = useState([
-    { id: 'type-work', name: 'Work', color: 'bg-blue-500' },
-    { id: 'type-personal', name: 'Personal', color: 'bg-green-500' },
-  ]);
+  // State: Types (categories for events) - loaded from backend
+  const [types, setTypes] = useState([]);
+  const [typesLoaded, setTypesLoaded] = useState(false);
+
+  // Load types from backend on mount
+  React.useEffect(() => {
+    const loadTypes = async () => {
+      try {
+        const backendTypes = await eventTypesApi.getAll();
+        // Convert backend format to frontend format
+        const frontendTypes = backendTypes.map(t => ({
+          id: t.id,
+          name: t.name,
+          color: t.color,
+          icon: t.icon,
+        }));
+        setTypes(frontendTypes);
+        setTypesLoaded(true);
+        console.log('✅ Types loaded from backend:', frontendTypes.length);
+      } catch (error) {
+        console.error('❌ Failed to load types from backend:', error);
+        // Fallback to demo data
+        setTypes([
+          { id: 'type-work', name: 'Work', color: 'bg-blue-500' },
+          { id: 'type-personal', name: 'Personal', color: 'bg-green-500' },
+        ]);
+        setTypesLoaded(true);
+      }
+    };
+    loadTypes();
+  }, []);
   
   // State: Custom task templates (user-created event types) - seeded with demo data
   const [taskTemplates, setTaskTemplates] = useState([
@@ -1773,6 +1925,20 @@ function App() {
   
   // State: Types manager modal
   const [showTypesManager, setShowTypesManager] = useState(false);
+
+  // State: Active navigation view
+  const [activeView, setActiveView] = useState('calendar');
+
+  // State: Calendar popover for active day selector
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [visibleMonthStart, setVisibleMonthStart] = useState(
+    new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1)
+  );
+
+  // Update visible month when selected date changes
+  React.useEffect(() => {
+    setVisibleMonthStart(new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1));
+  }, [selectedDate]);
 
   // Ref: Calendar DOM element for resize calculations
   const calendarDomRef = React.useRef(null);
@@ -1913,21 +2079,43 @@ function App() {
   };
   
   // Save type (create or update)
-  const handleSaveType = (typeData) => {
+  const handleSaveType = async (typeData) => {
     const existingType = types.find(t => t.id === typeData.id);
     
-    if (existingType) {
-      // Update existing type
-      setTypes(prev => prev.map(t => t.id === typeData.id ? typeData : t));
-    } else {
-      // Create new type
-      setTypes(prev => [...prev, typeData]);
+    try {
+      if (existingType) {
+        // Update existing type on backend
+        await eventTypesApi.update(typeData.id, {
+          ...typeData,
+          workspaceId: 'ws_dev',
+          defaultsJsonb: '{}',
+        });
+        setTypes(prev => prev.map(t => t.id === typeData.id ? typeData : t));
+        console.log('✅ Type updated on backend:', typeData.id);
+      } else {
+        // Create new type on backend
+        const created = await eventTypesApi.create({
+          ...typeData,
+          workspaceId: 'ws_dev',
+          defaultsJsonb: '{}',
+        });
+        setTypes(prev => [...prev, { ...typeData, id: created.id }]);
+        console.log('✅ Type created on backend:', created.id);
+      }
+    } catch (error) {
+      console.error('❌ Failed to save type on backend:', error);
+      // Still update local state for offline support
+      if (existingType) {
+        setTypes(prev => prev.map(t => t.id === typeData.id ? typeData : t));
+      } else {
+        setTypes(prev => [...prev, typeData]);
+      }
     }
   };
   
   // Delete type
-  const handleDeleteType = (typeId) => {
-    // Remove type from types list
+  const handleDeleteType = async (typeId) => {
+    // Remove type from types list locally
     setTypes(prev => prev.filter(t => t.id !== typeId));
     
     // Set typeId to null for all events that referenced this type
@@ -1939,6 +2127,14 @@ function App() {
     setScheduledItems(prev =>
       prev.map(item => item.typeId === typeId ? { ...item, typeId: null } : item)
     );
+
+    // Delete from backend
+    try {
+      await eventTypesApi.delete(typeId);
+      console.log('✅ Type deleted from backend:', typeId);
+    } catch (error) {
+      console.error('❌ Failed to delete type from backend:', error);
+    }
   };
 
   // ========================================
@@ -2611,6 +2807,13 @@ function App() {
     }
   }, [activeId, taskTemplates, scheduledItems]);
 
+  // Route handling: show backend test page if on /backend-test
+  const location = useLocation();
+  if (location.pathname === '/backend-test') {
+    return <BackendTest />;
+  }
+
+  // Main calendar app (default route)
   return (
     <DndContext
       sensors={sensors}
@@ -2629,20 +2832,47 @@ function App() {
       {/* UI State Monitor: Track drag hover namespace */}
       <DndMonitorBridge />
       
-      <div className="flex flex-col h-screen bg-gray-50">
+      {/* ========================================
+          TOP NAVIGATION BAR
+      ======================================== */}
+      <TopNav 
+        activeView={activeView}
+        onViewChange={setActiveView}
+        onQuickAdd={handleCreateTemplate}
+        onToggleSidebar={() => layoutStore.toggle()}
+      />
+
+      <div className="flex flex-col h-screen bg-gray-50 pt-[57px]">
+        
         {/* ========================================
-            HEADER: Hamburger + Controls
+            VIEW ROUTING: Show different content based on activeView
         ======================================== */}
-        <header className="shrink-0 bg-white border-b border-gray-300 px-4 py-3">
-          <div className="flex items-center gap-3">
-            <HamburgerButton />
-            <h2 className="text-xl font-bold text-gray-800">TimeBlocks</h2>
+        {activeView !== 'calendar' && (
+          <div className="flex-1 flex items-center justify-center p-8">
+            <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-8 text-center">
+              <h2 className="text-2xl font-bold text-gray-800 mb-4">
+                {activeView === 'home' && '🏠 Home'}
+                {activeView === 'tasks' && '🧩 Tasks'}
+                {activeView === 'settings' && '⚙️ Settings'}
+              </h2>
+              <p className="text-gray-600 mb-4">
+                This view is coming soon!
+              </p>
+              <button
+                onClick={() => setActiveView('calendar')}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                Go to Calendar
+              </button>
+            </div>
           </div>
-        </header>
+        )}
         
         {/* ========================================
             APP GRID LAYOUT (CSS Grid with var(--sidebar-w))
+            Only shown when activeView is 'calendar'
         ======================================== */}
+        {activeView === 'calendar' && (
         <div className="app-grid flex-1 relative">
           {/* LEFT SIDEBAR: Custom Event Templates */}
           <aside className="sidebar relative flex flex-col h-full bg-gray-100 overflow-hidden">
@@ -2692,22 +2922,129 @@ function App() {
           </aside>
 
           {/* RIGHT MAIN: Calendar */}
-          <main className="main-area h-full overflow-y-auto" id="calendar-container">
+          <main className="main-area h-full overflow-y-auto box-border" id="calendar-container" style={{ contain: 'layout paint' }}>
           <div className="p-6">
-            <div className="mb-4">
-              {/* View Mode + Weekend Controls */}
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-3">
-                  <select
-                    value={viewMode}
-                    onChange={(e) => setViewMode(e.target.value)}
-                    className="rounded-md border border-gray-300 bg-white text-gray-900 px-3 py-1.5 text-sm font-medium shadow-sm hover:bg-gray-50 transition"
-                  >
-                    <option value="day">Day</option>
-                    <option value="3day">3-Day</option>
-                    <option value="week">Week (Mon–Fri)</option>
-                  </select>
+            {/* ========================================
+                CALENDAR HEADER: 3-Zone Layout with Active Day
+            ======================================== */}
+            <header className="w-full mb-4">
+              <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
+                {/* LEFT: Empty spacer for balance */}
+                <div className="justify-self-start" />
 
+                {/* CENTER: ‹ [Today or Date] › (always centered) */}
+                <div className="justify-self-center relative">
+                  <div className="flex items-center gap-2">
+                    {/* Previous */}
+                    <button
+                      type="button"
+                      onClick={prevWindow}
+                      className="px-2 py-1 rounded-md border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 shadow-sm transition"
+                      aria-label="Previous range"
+                    >
+                      ‹
+                    </button>
+
+                    {/* Active Day / Today Button (clickable for calendar popover) */}
+                    <button
+                      type="button"
+                      onClick={() => setCalendarOpen(v => !v)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          setCalendarOpen(v => !v);
+                        } else if (e.key === 'Escape') {
+                          setCalendarOpen(false);
+                        }
+                      }}
+                      className="px-3 py-1.5 rounded-md border border-gray-300 bg-white hover:bg-gray-50 text-sm font-medium text-gray-700 shadow-sm transition min-w-[140px]"
+                      aria-haspopup="dialog"
+                      aria-expanded={calendarOpen ? 'true' : 'false'}
+                      aria-controls="active-day-calendar"
+                    >
+                      {sameDay(selectedDate, new Date()) ? 'Today' : formatActiveDay(selectedDate)}
+                    </button>
+
+                    {/* Next */}
+                    <button
+                      type="button"
+                      onClick={nextWindow}
+                      className="px-2 py-1 rounded-md border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 shadow-sm transition"
+                      aria-label="Next range"
+                    >
+                      ›
+                    </button>
+                  </div>
+
+                  {/* Calendar Popover (positioned relative to center button) */}
+                  {calendarOpen && (
+                    <>
+                      {/* Backdrop to close on outside click */}
+                      <div
+                        className="fixed inset-0 z-40"
+                        onClick={() => setCalendarOpen(false)}
+                        aria-hidden="true"
+                      />
+                      
+                      {/* Popover - centered below button */}
+                      <div
+                        id="active-day-calendar"
+                        role="dialog"
+                        aria-label="Choose date"
+                        className="absolute z-50 mt-2 left-1/2 -translate-x-1/2 w-72 rounded-lg border border-gray-300 bg-white shadow-xl p-3"
+                      >
+                        <InlineCalendarPopover
+                          monthStart={visibleMonthStart}
+                          currentDate={selectedDate}
+                          onSelect={(d) => {
+                            setDate(d);
+                            setCalendarOpen(false);
+                          }}
+                          onClose={() => setCalendarOpen(false)}
+                          onMonthChange={setVisibleMonthStart}
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* RIGHT: View Selector + Weekend Toggle + Zoom */}
+                <div className="justify-self-end flex items-center gap-3">
+                  {/* View Mode Tabs */}
+                  <div className="inline-flex rounded-md overflow-hidden border border-gray-300 bg-gray-100">
+                    <button
+                      onClick={() => setViewMode('day')}
+                      className={`px-3 py-1.5 text-sm font-medium transition ${
+                        viewMode === 'day'
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-white text-gray-700 hover:bg-gray-50'
+                      }`}
+                    >
+                      Day
+                    </button>
+                    <button
+                      onClick={() => setViewMode('3day')}
+                      className={`px-3 py-1.5 text-sm font-medium transition border-x border-gray-300 ${
+                        viewMode === '3day'
+                          ? 'bg-blue-600 text-white border-blue-600'
+                          : 'bg-white text-gray-700 hover:bg-gray-50'
+                      }`}
+                    >
+                      3-Day
+                    </button>
+                    <button
+                      onClick={() => setViewMode('week')}
+                      className={`px-3 py-1.5 text-sm font-medium transition ${
+                        viewMode === 'week'
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-white text-gray-700 hover:bg-gray-50'
+                      }`}
+                    >
+                      Week
+                    </button>
+                  </div>
+
+                  {/* Weekend Toggle */}
                   <label className="flex items-center gap-2 text-sm text-gray-700 font-medium">
                     <input
                       type="checkbox"
@@ -2715,43 +3052,16 @@ function App() {
                       onChange={(e) => setIncludeWeekends(e.target.checked)}
                       className="accent-blue-600 w-4 h-4"
                     />
-                    Include weekends
+                    Weekends
                   </label>
+
+                  {/* Zoom Info */}
+                  <span className="text-sm font-normal text-gray-600">
+                    Zoom: {((pixelsPerSlot / DEFAULT_PIXELS_PER_SLOT) * 100).toFixed(0)}%
+                  </span>
                 </div>
-                
-                {/* Zoom Info */}
-                <span className="text-sm font-normal text-gray-600">
-                  Zoom: {((pixelsPerSlot / DEFAULT_PIXELS_PER_SLOT) * 100).toFixed(0)}% 
-                  <span className="ml-2 text-xs text-gray-500">(Ctrl+Scroll to zoom)</span>
-                </span>
               </div>
-              
-              {/* Multi-menu date strip */}
-              <div className="mb-3">
-                <DateStrip
-                  days={displayedDays}
-                  onChangeDay={handleChangeDay}
-                  onPrevWindow={prevWindow}
-                  onNextWindow={nextWindow}
-                  onToday={goToday}
-                  viewMode={viewMode}
-                />
-              </div>
-              
-              {/* Date Range Header */}
-              <h2 className="text-2xl font-bold text-gray-800">
-                {displayedDays.length > 1 ? (
-                  <>
-                    {format(displayedDays[0], 'EEE, MMM d')} – {format(displayedDays[displayedDays.length - 1], 'EEE, MMM d, yyyy')}
-                  </>
-                ) : (
-                  <>
-                    {format(displayedDays[0], 'EEE, MMM d, yyyy')}
-                  </>
-                )}
-                <span className="opacity-80"> Schedule</span>
-              </h2>
-            </div>
+            </header>
             
             {/* Multi-column calendar grid */}
             <MultiDayCalendar
@@ -2791,6 +3101,7 @@ function App() {
           {/* Drag Proxy: Follows cursor during resize */}
           <DragProxy x={proxyState.x} visible={proxyState.visible} />
         </div>
+        )}
       </div>
 
       {/* ========================================

@@ -70,6 +70,7 @@ src/components/ViewModeToggle.jsx
 src/config/policies.js
 src/constants/calendar.js
 src/constants/colors.js
+src/dev/consoleNoiseFilter.js
 src/index.css
 src/main.jsx
 src/state/dateStore.js
@@ -85,539 +86,6 @@ vite.config.js
 
 <files>
 This section contains the contents of the repository's files.
-
-<file path="src/components/HamburgerButton.jsx">
-// src/components/HamburgerButton.jsx
-import { layoutStore } from '../state/layoutStore';
-
-export default function HamburgerButton() {
-  return (
-    <button
-      aria-label="Toggle menu"
-      onClick={() => layoutStore.toggle()}
-      className="inline-flex items-center justify-center rounded-lg border px-2.5 py-2 hover:bg-neutral-800/40 transition shadow-sm"
-    >
-      <span className="sr-only">Toggle menu</span>
-      {/* simple hamburger icon */}
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-      </svg>
-    </button>
-  );
-}
-</file>
-
-<file path="src/components/MultiDayCalendar.jsx">
-// src/components/MultiDayCalendar.jsx
-import { formatISO, format } from 'date-fns';
-
-/**
- * MultiDayCalendar renders N CalendarGrid columns, one per day in `days`.
- * It namespaces all droppable/drag ids per-day so multiple grids can coexist in the same DnD context.
- *
- * Props:
- * - days: Date[]                 // ordered days for the current view (1|3|5 entries)
- * - CalendarGrid: ReactComponent // your existing CalendarGrid component
- * - gridProps: object            // common props for all grids (hour range, slotHeight, zoom, etc.)
- * - onDropToDay: (day, payload) => void
- *      Called when an item is dropped into a day's grid. Payload contains whatever your CalendarGrid emits
- * - onResizeOnDay: (day, payload) => void
- *      Called when an event is resized in a day's grid
- * - getEventsForDay: (dateKey) => Event[]
- *      Function to get events for a specific day
- */
-export default function MultiDayCalendar({
-  days,
-  CalendarGrid,
-  gridProps,
-  onDropToDay,
-  onResizeOnDay,
-  getEventsForDay,
-}) {
-  const cols =
-    days.length === 5 ? 'grid-cols-5' :
-    days.length === 3 ? 'grid-cols-3' : 'grid-cols-1';
-
-  return (
-    <div className={`grid ${cols} gap-0 h-full rounded-lg border border-gray-300 bg-white divide-x divide-gray-300 overflow-hidden`}>
-      {days.map((day, idx) => {
-        const dayKey = formatISO(day, { representation: 'date' }); // YYYY-MM-DD
-        const idNamespace = `day:${dayKey}`; // namespace for droppables/draggables
-
-        // Get events for this specific day
-        const dayItems = getEventsForDay ? getEventsForDay(dayKey) : 
-          (gridProps.scheduledItems || []).filter(item => {
-            // Fallback: filter from scheduledItems if getEventsForDay not provided
-            if (!item.dateKey) return dayKey === formatISO(days[0], { representation: 'date' });
-            return item.dateKey === dayKey;
-          });
-
-        return (
-          <div key={dayKey} className="flex flex-col min-w-0">
-            {/* Day header */}
-            <div className="px-3 py-2 bg-gray-100 border-b border-gray-200">
-              <h3 className="text-sm font-semibold text-gray-800 text-center">
-                {format(day, 'EEE, MMM d')}
-              </h3>
-            </div>
-            
-            {/* Calendar grid for this day */}
-            <div className="flex-1 overflow-y-auto no-scrollbar">
-              <CalendarGrid
-                {...gridProps}
-                scheduledItems={dayItems} // Override with day-filtered items
-                // NEW: scope each grid to a single day
-                dayDate={day}
-                dayKey={dayKey}
-                idNamespace={idNamespace}
-                // When a drop happens in this grid, bubble up with the day info
-                onDrop={(payload) => onDropToDay?.(day, { ...payload, dayKey })}
-                onResize={(payload) => onResizeOnDay?.(day, { ...payload, dayKey })}
-              />
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-</file>
-
-<file path="src/components/SplitPane.jsx">
-// src/components/SplitPane.jsx
-import React, { useEffect, useRef } from 'react';
-import { layoutStore } from '../state/layoutStore';
-
-function useLayout() {
-  const [, force] = React.useReducer(x => x + 1, 0);
-  useEffect(() => layoutStore.subscribe(force), []);
-  return layoutStore.get();
-}
-
-/**
- * SplitPane
- * Props:
- *   left: ReactNode
- *   right: ReactNode
- *   collapseThresholdPx = 40   // auto-close if narrower on release
- *   minPx = 160                // soft minimum while dragging (still can close)
- */
-export default function SplitPane({
-  left,
-  right,
-  collapseThresholdPx = 40,
-  minPx = 160,
-}) {
-  const containerRef = useRef(null);
-  const handleRef = useRef(null);
-  const { sidebarOpen, sidebarWidthPx, containerWidthPx } = useLayout();
-
-  // Measure container via ResizeObserver and push into store
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(([entry]) => {
-      const w = Math.round(entry.contentRect.width);
-      layoutStore.setContainerWidthPx(w);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  // Pointer capture based drag
-  useEffect(() => {
-    const handle = handleRef.current;
-    if (!handle) return;
-
-    const onPointerDown = (e) => {
-      // Left click or primary touch
-      handle.setPointerCapture(e.pointerId);
-      layoutStore.setResizing(true);
-      const startX = e.clientX;
-      const startPx = layoutStore.get().sidebarWidthPx;
-      const cw = layoutStore.get().containerWidthPx || containerRef.current?.clientWidth || 0;
-      const maxPx = Math.round(cw * 0.5);
-
-      const onPointerMove = (ev) => {
-        if (!handle.hasPointerCapture(ev.pointerId)) return;
-        const dx = ev.clientX - startX;
-        let next = startPx + dx;
-        // allow sliding from closed to open
-        if (!layoutStore.get().sidebarOpen && next > 0) {
-          layoutStore.setOpen(true);
-        }
-        // soft min (minPx) but allow going below to hit "close"
-        next = Math.max(0, next);
-        layoutStore.setWidthPx(Math.min(next, maxPx || next));
-      };
-
-      const onPointerUp = (ev) => {
-        if (handle.hasPointerCapture(ev.pointerId)) handle.releasePointerCapture(ev.pointerId);
-        layoutStore.setResizing(false);
-        const px = layoutStore.get().sidebarWidthPx;
-        if (px < collapseThresholdPx) {
-          layoutStore.setOpen(false);
-          layoutStore.setWidthPx(minPx); // keep a sensible width for next open
-        } else {
-          layoutStore.setOpen(true);
-        }
-        handle.removeEventListener('pointermove', onPointerMove);
-        handle.removeEventListener('pointerup', onPointerUp);
-        handle.removeEventListener('pointercancel', onPointerUp);
-      };
-
-      handle.addEventListener('pointermove', onPointerMove);
-      handle.addEventListener('pointerup', onPointerUp);
-      handle.addEventListener('pointercancel', onPointerUp);
-    };
-
-    handle.addEventListener('pointerdown', onPointerDown);
-    return () => handle.removeEventListener('pointerdown', onPointerDown);
-  }, [collapseThresholdPx, minPx]);
-
-  // Compute styles: flex-basis in px (no width/flex conflicts)
-  const leftStyle = sidebarOpen
-    ? { flex: `0 0 ${sidebarWidthPx}px` }
-    : { flex: '0 0 0px' };
-
-  return (
-    <div ref={containerRef} className="relative flex w-full h-full overflow-hidden">
-      {/* LEFT */}
-      <div
-        className={`h-full transition-[flex-basis] duration-150 ease-out`}
-        style={leftStyle}
-      >
-        <div className={`h-full ${sidebarOpen ? '' : '-translate-x-full'} transition-transform duration-150`}>
-          {left}
-        </div>
-      </div>
-
-      {/* DIVIDER / RESIZER */}
-      <div
-        ref={handleRef}
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize menu"
-        tabIndex={0}
-        className="
-          z-30 h-full w-3 shrink-0 cursor-col-resize
-          bg-transparent hover:bg-neutral-800/40 active:bg-neutral-800/60
-          touch-none select-none
-        "
-        onKeyDown={(e) => {
-          const step = 24; // px step with keyboard
-          if (e.key === 'ArrowLeft') {
-            e.preventDefault();
-            layoutStore.setWidthPx(layoutStore.get().sidebarWidthPx - step);
-            if (layoutStore.get().sidebarWidthPx <= 0) layoutStore.setOpen(false);
-          } else if (e.key === 'ArrowRight') {
-            e.preventDefault();
-            if (!layoutStore.get().sidebarOpen) layoutStore.setOpen(true);
-            layoutStore.setWidthPx(layoutStore.get().sidebarWidthPx + step);
-          } else if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            layoutStore.setOpen(!layoutStore.get().sidebarOpen);
-          } else if (e.key.toLowerCase() === 'escape') {
-            e.preventDefault();
-            layoutStore.setOpen(false);
-          }
-        }}
-      />
-
-      {/* RIGHT (fills remaining space) */}
-      <div className="h-full flex-1 min-w-0">
-        {right}
-      </div>
-    </div>
-  );
-}
-</file>
-
-<file path="src/config/policies.js">
-// src/config/policies.js
-
-/**
- * Application behavior policies
- * Configure how the app handles conflicts and user actions
- */
-
-// Move policy: how to handle cross-day/cross-time moves
-export const MOVE_POLICY = 'always';    // 'always' | 'confirm-then-commit'
-
-// Resize policy: how to handle resize operations
-export const RESIZE_POLICY = 'confirm-then-commit'; // 'always' | 'confirm-then-commit'
-
-// Conflict behavior: what to do when overlaps are detected
-export const CONFLICT_BEHAVIOR = 'allow'; // 'allow' | 'inform' | 'auto-shift' (future)
-
-/**
- * Policy Descriptions:
- * 
- * MOVE_POLICY:
- * - 'always': Moves commit immediately, conflicts shown informationally (if at all)
- * - 'confirm-then-commit': Shows modal before committing (blocks move)
- * 
- * RESIZE_POLICY:
- * - 'always': Resize commits immediately
- * - 'confirm-then-commit': Shows modal before committing
- * 
- * CONFLICT_BEHAVIOR:
- * - 'allow': Allow all overlaps without warning
- * - 'inform': Show informational modal after action (doesn't block)
- * - 'auto-shift': Automatically adjust times to avoid conflicts (future)
- */
-</file>
-
-<file path="src/state/eventsStore.js">
-// src/state/eventsStore.js
-import { formatISO } from 'date-fns';
-
-/**
- * Event schema (future-friendly):
- * {
- *   id: string,
- *   label: string,              // display name
- *   dateKey: 'YYYY-MM-DD',      // day partition
- *   startMinutes: number,       // minutes since day start (e.g., 0 = START_HOUR)
- *   duration: number,           // duration in minutes
- *   color?: string,             // Tailwind class
- *   typeId?: string,            // foreign key to type
- *   meta?: Record<string, any>, // extensible metadata
- * }
- */
-
-function keyOf(date) {
-  return formatISO(date, { representation: 'date' });
-}
-
-export function createEventsStore(initial = []) {
-  let byId = new Map();
-  let byDate = new Map(); // dateKey -> Set<id>
-
-  // Cache store state to avoid infinite loops
-  let cachedState = { byId, byDate };
-
-  const link = (dateKey, id) => {
-    if (!byDate.has(dateKey)) byDate.set(dateKey, new Set());
-    byDate.get(dateKey).add(id);
-  };
-  
-  const unlink = (dateKey, id) => { 
-    byDate.get(dateKey)?.delete(id); 
-  };
-
-  // Seed initial data
-  initial.forEach((e) => {
-    byId.set(e.id, e);
-    link(e.dateKey || keyOf(new Date()), e.id);
-  });
-
-  const subscribers = new Set();
-  const notify = () => {
-    cachedState = { byId, byDate };
-    subscribers.forEach((fn) => fn(cachedState));
-  };
-
-  const get = () => cachedState;
-
-  const subscribe = (fn) => { 
-    subscribers.add(fn); 
-    return () => subscribers.delete(fn); 
-  };
-
-  const upsertEvent = (e) => {
-    const prev = byId.get(e.id);
-    byId.set(e.id, e);
-    if (prev?.dateKey !== e.dateKey) {
-      if (prev) unlink(prev.dateKey, e.id);
-      link(e.dateKey, e.id);
-    } else if (!prev) {
-      link(e.dateKey, e.id);
-    }
-    notify();
-  };
-
-  const moveEventToDay = (id, newDateKey, patch = {}) => {
-    const prev = byId.get(id);
-    if (!prev) return;
-    const next = { ...prev, ...patch, dateKey: newDateKey };
-    byId.set(id, next);
-    if (prev.dateKey !== newDateKey) {
-      unlink(prev.dateKey, id);
-      link(newDateKey, id);
-    }
-    notify();
-  };
-
-  const updateEventTime = (id, startMinutes, duration, patch = {}) => {
-    const prev = byId.get(id);
-    if (!prev) return;
-    byId.set(id, { ...prev, startMinutes, duration, ...patch });
-    notify();
-  };
-
-  const removeEvent = (id) => {
-    const prev = byId.get(id);
-    if (!prev) return;
-    byId.delete(id);
-    unlink(prev.dateKey, id);
-    notify();
-  };
-
-  const getEventsForDate = (dateKey) => {
-    const ids = byDate.get(dateKey);
-    if (!ids) return [];
-    return Array.from(ids).map((id) => byId.get(id)).filter(Boolean);
-  };
-
-  const findConflictsSameDay = (dateKey, startMinutes, duration, excludeId = null) => {
-    const events = getEventsForDate(dateKey);
-    const endMinutes = startMinutes + duration;
-    return events.filter((e) => {
-      if (e.id === excludeId) return false;
-      const eEnd = e.startMinutes + e.duration;
-      return !(eEnd <= startMinutes || e.startMinutes >= endMinutes);
-    });
-  };
-
-  const getAllEvents = () => Array.from(byId.values());
-
-  return {
-    keyOf,
-    get, 
-    subscribe,
-    upsertEvent, 
-    moveEventToDay, 
-    updateEventTime, 
-    removeEvent,
-    getEventsForDate, 
-    findConflictsSameDay,
-    getAllEvents,
-  };
-}
-
-export const eventsStore = createEventsStore();
-</file>
-
-<file path="src/state/layoutStore.js">
-// src/state/layoutStore.js
-const KEY_WIDTH_PX = 'tb.sidebarWidthPx';
-const KEY_OPEN = 'tb.sidebarOpen';
-
-function readPx(defaultPx = 320) {
-  const n = Number(localStorage.getItem(KEY_WIDTH_PX));
-  return Number.isFinite(n) ? Math.max(0, n) : defaultPx;
-}
-function readOpen() {
-  const v = localStorage.getItem(KEY_OPEN);
-  return v === null ? true : v === 'true';
-}
-
-export function createLayoutStore() {
-  let sidebarOpen = readOpen();
-  let sidebarWidthPx = readPx();       // authoritative width in px
-  let containerWidthPx = 0;            // measured by SplitPane
-  let isResizingSidebar = false;
-
-  const subs = new Set();
-  const get = () => ({ sidebarOpen, sidebarWidthPx, containerWidthPx, isResizingSidebar });
-  const notify = () => subs.forEach(fn => fn(get()));
-  const subscribe = (fn) => { subs.add(fn); return () => subs.delete(fn); };
-
-  const setOpen = (open) => { sidebarOpen = !!open; localStorage.setItem(KEY_OPEN, String(sidebarOpen)); notify(); };
-  const toggle = () => setOpen(!sidebarOpen);
-
-  const setContainerWidthPx = (px) => { 
-    containerWidthPx = Math.max(0, px|0); 
-    // clamp current width to max 50% whenever container changes
-    const maxPx = Math.round(containerWidthPx * 0.5);
-    if (sidebarWidthPx > maxPx) sidebarWidthPx = maxPx;
-    notify();
-  };
-
-  const setWidthPx = (px) => {
-    const maxPx = Math.round(containerWidthPx * 0.5);
-    const clamped = Math.max(0, Math.min(px|0, maxPx || px|0)); // allow before measure
-    sidebarWidthPx = clamped;
-    localStorage.setItem(KEY_WIDTH_PX, String(sidebarWidthPx));
-    notify();
-  };
-
-  const setResizing = (v) => { isResizingSidebar = !!v; notify(); };
-
-  return {
-    get, subscribe,
-    setOpen, toggle, setWidthPx, setContainerWidthPx, setResizing,
-  };
-}
-
-export const layoutStore = createLayoutStore();
-</file>
-
-<file path="src/state/uiStore.js">
-// src/state/uiStore.js
-
-/**
- * UI Session Store
- * Tracks ephemeral UI state for drag/resize operations
- * Does not persist - resets on page refresh
- */
-export function createUiStore() {
-  // dragOverNamespace: string | null  e.g. 'day:2025-10-15'
-  // activeResize: { eventId, dayKey, draftStart, draftDuration } | null
-  let dragOverNamespace = null;
-  let activeResize = null;
-
-  // Cache state to prevent infinite loops
-  let cachedState = { dragOverNamespace, activeResize };
-
-  const subs = new Set();
-  const get = () => cachedState;
-  const subscribe = (fn) => { subs.add(fn); return () => subs.delete(fn); };
-  const notify = () => {
-    cachedState = { dragOverNamespace, activeResize };
-    subs.forEach((fn) => fn(cachedState));
-  };
-
-  const setDragOverNs = (ns) => { 
-    dragOverNamespace = ns; 
-    notify(); 
-  };
-  
-  const clearDragOverNs = () => { 
-    dragOverNamespace = null; 
-    notify(); 
-  };
-
-  const beginResize = ({ eventId, dayKey, draftStart, draftDuration }) => {
-    activeResize = { eventId, dayKey, draftStart, draftDuration };
-    notify();
-  };
-  
-  const updateResizeDraft = (patch) => {
-    if (!activeResize) return;
-    activeResize = { ...activeResize, ...patch };
-    notify();
-  };
-  
-  const endResize = () => { 
-    activeResize = null; 
-    notify(); 
-  };
-
-  return {
-    get, 
-    subscribe,
-    setDragOverNs, 
-    clearDragOverNs,
-    beginResize, 
-    updateResizeDraft, 
-    endResize,
-  };
-}
-
-export const uiStore = createUiStore();
-</file>
 
 <file path=".eslintrc.json">
 {
@@ -2276,668 +1744,6 @@ export default {
 }
 </file>
 
-<file path="README.md">
-# TimeBlocks Experiment
-
-An experimental time-blocking calendar built with React and @dnd-kit/core.
-
-## Features
-
-- **Drag & Drop**: Drag task blocks from the left panel onto the calendar
-- **15-Minute Snapping**: Tasks automatically snap to 15-minute increments
-- **Rearrange**: Move tasks around within the calendar to reschedule
-- **Reusable Tasks**: Task templates remain in the left panel after dragging (they're copied, not moved)
-- **Visual Time Grid**: Clear hourly and half-hourly divisions from 8 AM to 5 PM
-
-## Getting Started
-
-1. **Install dependencies:**
-   ```bash
-   npm install
-   ```
-
-2. **Run development server:**
-   ```bash
-   npm run dev
-   ```
-
-3. **Open your browser:**
-   Navigate to the URL shown in the terminal (usually `http://localhost:5173`)
-
-## How It Works
-
-### Architecture
-
-- **DndContext**: Wraps the entire app to enable drag-and-drop functionality
-- **Task Templates**: Left panel contains draggable task blocks
-- **Calendar Grid**: Right panel displays a time-based grid with 15-minute slots
-- **Scheduled Items**: Dropped tasks that appear in the calendar
-
-### Key Components
-
-- `TaskBlock`: Visual representation of a task
-- `DraggableTaskBlock`: Wrapper that makes task templates draggable
-- `ScheduledItem`: Tasks that have been placed in the calendar (also draggable)
-- `CalendarGrid`: The time grid with drop zone functionality
-
-### Snapping Logic
-
-The app converts between pixels and time:
-- Each hour = 80 pixels
-- Drag position → minutes from start → rounded to nearest 15-minute slot
-- Position is clamped to calendar bounds (8 AM - 5 PM)
-
-## Technologies
-
-- React 18
-- @dnd-kit/core 6.x (drag-and-drop library)
-- Tailwind CSS (styling)
-- Vite (build tool)
-
-## Extending
-
-To add new task types, modify the `TASK_TEMPLATES` array in `src/App.jsx`:
-
-```javascript
-const TASK_TEMPLATES = [
-  { id: 'workout', label: 'Workout', color: 'bg-blue-500' },
-  // Add more tasks here
-];
-```
-
-To change calendar hours, modify `START_HOUR` and `END_HOUR` constants.
-
-## License
-
-MIT - Free to use and modify
-</file>
-
-<file path="src/components/Calendar/CalendarGrid.jsx">
-import React, { useSyncExternalStore } from 'react';
-import { useDroppable } from '@dnd-kit/core';
-import { START_HOUR, END_HOUR, MINUTES_PER_SLOT, DEFAULT_PIXELS_PER_SLOT, MIN_PIXELS_PER_SLOT, MAX_PIXELS_PER_SLOT } from '../../constants/calendar';
-import { generateTimeSlots, minutesToPixels } from '../../utils/time';
-import ScheduledItem from './ScheduledItem';
-import ScheduledItemPreview from './ScheduledItemPreview';
-import GhostEvent from './GhostEvent';
-import { uiStore } from '../../state/uiStore';
-
-// Hook to consume UI store
-function useUi() {
-  return useSyncExternalStore(uiStore.subscribe, uiStore.get, uiStore.get);
-}
-
-// ========================================
-// COMPONENT: CalendarGrid (time slots + drop zone)
-// ========================================
-
-/**
- * NEW PROPS (optional, for multi-day support):
- * - dayDate: Date         // The date this grid represents
- * - dayKey: string        // ISO date key 'YYYY-MM-DD' for persistence/queries
- * - idNamespace: string   // unique prefix to namespace droppable IDs (e.g. 'day:2025-10-15')
- * - onDrop: (payload) => void  // callback when an item is dropped in this grid
- */
-export default function CalendarGrid({ 
-  scheduledItems, 
-  ghostPosition, 
-  pixelsPerSlot, 
-  onZoom, 
-  calendarDomRef, 
-  resizeDraft, 
-  onResizeStart, 
-  isResizing,
-  // New props for multi-day support (optional)
-  dayDate,
-  dayKey,
-  idNamespace,
-  onDrop,
-}) {
-  const timeSlots = generateTimeSlots();
-  const calendarHeight = (END_HOUR - START_HOUR) * 60 * (pixelsPerSlot / MINUTES_PER_SLOT);
-  
-  const containerRef = React.useRef(null);
-  const [isDragging, setIsDragging] = React.useState(false);
-  const [dragStart, setDragStart] = React.useState({ x: 0, y: 0, scrollTop: 0 });
-
-  // Consume UI store for drag/resize state
-  const ui = useUi();
-  
-  // Only show ghost in this grid if it's currently hovered
-  const isHoveringThisGrid = idNamespace ? (ui.dragOverNamespace === idNamespace) : true;
-  
-  // Only show resize draft if it's for this day
-  const showResizeDraft = resizeDraft && (!idNamespace || resizeDraft.dateKey === dayKey);
-
-  // Make the entire calendar a droppable zone
-  // Use namespaced ID if provided (multi-day), otherwise 'calendar' (single-day backward compat)
-  const droppableId = idNamespace ? `${idNamespace}::calendar` : 'calendar';
-  
-  const { setNodeRef } = useDroppable({
-    id: droppableId,
-    data: {
-      dayKey: dayKey || null,
-      dayDate: dayDate || null,
-    },
-  });
-
-  // ========================================
-  // ZOOM FUNCTIONALITY (Mouse Wheel)
-  // ========================================
-  const handleWheel = React.useCallback((e) => {
-    // Check if scrolling vertically (normal scroll) or zooming (Ctrl+wheel or pinch)
-    if (e.ctrlKey || e.metaKey) {
-      e.preventDefault();
-      
-      const zoomDelta = -e.deltaY * 0.1; // Sensitivity adjustment
-      const newPixelsPerSlot = Math.max(
-        MIN_PIXELS_PER_SLOT,
-        Math.min(MAX_PIXELS_PER_SLOT, pixelsPerSlot + zoomDelta)
-      );
-      
-      if (newPixelsPerSlot !== pixelsPerSlot) {
-        onZoom(newPixelsPerSlot);
-      }
-    }
-  }, [pixelsPerSlot, onZoom]);
-
-  // ========================================
-  // DRAG-TO-SCROLL FUNCTIONALITY
-  // ========================================
-  const handleMouseDown = React.useCallback((e) => {
-    // Don't start scroll-drag if currently resizing an event
-    if (isResizing) return;
-    
-    // Only initiate drag-to-scroll with middle mouse or when not on an event
-    if (e.button === 1 || (e.button === 0 && e.target === containerRef.current)) {
-      setIsDragging(true);
-      setDragStart({
-        x: e.clientX,
-        y: e.clientY,
-        scrollTop: containerRef.current?.parentElement?.scrollTop || 0,
-      });
-      e.preventDefault();
-    }
-  }, [isResizing]);
-
-  const handleMouseMove = React.useCallback((e) => {
-    if (!isDragging || !containerRef.current?.parentElement) return;
-    
-    const deltaY = e.clientY - dragStart.y;
-    const newScrollTop = dragStart.scrollTop - deltaY;
-    
-    containerRef.current.parentElement.scrollTop = newScrollTop;
-  }, [isDragging, dragStart]);
-
-  const handleMouseUp = React.useCallback(() => {
-    if (isDragging) {
-      setIsDragging(false);
-    }
-  }, [isDragging]);
-
-  // Add event listeners
-  React.useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    container.addEventListener('wheel', handleWheel, { passive: false });
-    
-    if (isDragging) {
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
-    }
-
-    return () => {
-      container.removeEventListener('wheel', handleWheel);
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [handleWheel, handleMouseMove, handleMouseUp, isDragging]);
-
-  return (
-    <div 
-      ref={(node) => {
-        setNodeRef(node);
-        containerRef.current = node;
-        if (node && calendarDomRef) calendarDomRef.current = node;
-      }}
-      data-droppable-id={droppableId}
-      data-day-key={dayKey || 'default'}
-      className={`relative bg-white ${!idNamespace ? 'border-l border-gray-300' : ''} ${isDragging ? 'cursor-grabbing' : 'cursor-default'} no-scrollbar overflow-x-hidden overscroll-x-contain touch-pan-y`}
-      style={{ height: `${calendarHeight}px`, touchAction: 'pan-y' }}
-      onMouseDown={handleMouseDown}
-      onWheel={(e) => {
-        // Suppress horizontal wheel gestures to prevent panning
-        if (!e.ctrlKey && !e.metaKey && Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
-          e.preventDefault();
-        }
-        // Zoom handling continues in handleWheel callback
-      }}
-    >
-      {/* Time labels and grid lines */}
-      {timeSlots.map((slot, index) => {
-        const topPosition = minutesToPixels(slot.minutes, pixelsPerSlot);
-        const lineColor = slot.isHour 
-          ? 'border-gray-400' 
-          : slot.isHalfHour 
-          ? 'border-gray-300' 
-          : 'border-gray-200';
-        
-        return (
-          <div
-            key={index}
-            className={`absolute left-0 right-0 border-t ${lineColor}`}
-            style={{ top: `${topPosition}px` }}
-          >
-            {slot.isHour && (
-              <div className="absolute left-2 -top-3 text-xs text-gray-600 font-medium bg-white px-1">
-                {slot.time}
-              </div>
-            )}
-          </div>
-        );
-      })}
-
-      {/* Scheduled items - CRITICAL: Skip item being resized to avoid duplicate draggable */}
-      {/* Use per-day keys to prevent React recycling across columns */}
-      {scheduledItems
-        .filter(item => {
-          const isBeingResized = resizeDraft?.id === item.id;
-          return !isBeingResized; // Don't render the real draggable when resizing
-        })
-        .map((item) => (
-          <ScheduledItem 
-            key={dayKey ? `${item.id}@${dayKey}` : item.id}
-            item={item} 
-            pixelsPerSlot={pixelsPerSlot}
-            onResizeStart={onResizeStart}
-            isBeingResized={false} // Never true here since we filtered it out
-            isResizing={isResizing}
-          />
-        ))
-      }
-
-      {/* Live resize draft - shows preview while resizing */}
-      {/* PHASE 2 FIX: Use ScheduledItemPreview (no useDraggable) to avoid duplicate ID */}
-      {/* Only show if this is the active day for resize */}
-      {showResizeDraft && (
-        <div className="pointer-events-none absolute inset-0 z-30">
-          <ScheduledItemPreview
-            key={`preview-${resizeDraft.id}@${dayKey || 'default'}`}
-            item={resizeDraft}
-            pixelsPerSlot={pixelsPerSlot}
-          />
-        </div>
-      )}
-
-      {/* Ghost/shadow preview - shows where dragged item will land */}
-      {/* Only render ghost in the grid that's currently hovered */}
-      {isHoveringThisGrid && <GhostEvent ghostPosition={ghostPosition} pixelsPerSlot={pixelsPerSlot} />}
-    </div>
-  );
-}
-</file>
-
-<file path="src/components/Calendar/GhostEvent.jsx">
-import { minutesToPixels, formatTime } from '../../utils/time';
-
-// ========================================
-// COMPONENT: GhostEvent (preview of where event will be placed)
-// ========================================
-
-export default function GhostEvent({ ghostPosition, pixelsPerSlot }) {
-  if (!ghostPosition) return null;
-
-  const { startMinutes, task } = ghostPosition;
-  const topPosition = minutesToPixels(startMinutes, pixelsPerSlot);
-  
-  // Calculate height based on task duration - using dynamic slot height
-  const duration = task.duration || 30; // Default 30 minutes
-  const height = minutesToPixels(duration, pixelsPerSlot);
-  
-  // Calculate end time for preview
-  const endMinutes = startMinutes + duration;
-
-  return (
-    <div
-      className="absolute left-20 right-2 border-2 border-gray-400 border-dashed rounded bg-gray-50 bg-opacity-30 z-20 pointer-events-none px-3 py-2 flex flex-col justify-between"
-      style={{ 
-        top: `${topPosition}px`,
-        height: `${height}px`,
-      }}
-    >
-      <div className="text-gray-700 text-sm font-medium">
-        {task.label}
-      </div>
-      <div className="text-gray-600 text-xs">
-        {formatTime(startMinutes)} - {formatTime(endMinutes)}
-      </div>
-    </div>
-  );
-}
-</file>
-
-<file path="src/components/Calendar/ScheduledItem.jsx">
-import React from 'react';
-import { useDraggable } from '@dnd-kit/core';
-import { trackScheduledItemRender } from '../../utils/diagnostics';
-import { minutesToPixels, formatTime } from '../../utils/time';
-
-// ========================================
-// COMPONENT: ScheduledItem (task placed in calendar)
-// ========================================
-
-export default function ScheduledItem({ item, pixelsPerSlot, onResizeStart, isBeingResized = false, isResizing = false }) {
-  // PHASE 1 DIAGNOSTIC: Track this render
-  trackScheduledItemRender(item.id);
-
-  // ========================================
-  // DRAGGABLE SETUP - Strict gating (disabled + conditional listeners)
-  // ========================================
-  
-  // CRITICAL: allowDrag considers BOTH item-specific AND global resize state
-  const allowDrag = !isBeingResized && !isResizing;
-  
-  const { attributes, listeners, setNodeRef, isDragging, transform } = useDraggable({
-    id: item.id,
-    data: {
-      type: 'scheduled',
-      item,
-    },
-    disabled: !allowDrag, // Hard stop: disabled when ANY resize is active
-  });
-
-  // StackOverflow pattern: Only spread listeners when drag is allowed
-  const listenersOnState = allowDrag ? listeners : undefined;
-
-  // WARNING: isDragging should be false when ANY resize is active
-  React.useEffect(() => {
-    const willApplyTransform = isDragging && allowDrag && !!transform;
-    
-    if ((isBeingResized || isResizing) && isDragging) {
-      console.error('⚠️ ASSERTION WARNING: isDragging=true during resize!', {
-        isBeingResized,
-        isResizing,
-        isDragging,
-        allowDrag,
-        disabled: !allowDrag,
-        listenersAttached: !!listenersOnState,
-        message: 'Check: (1) only one draggable per ID, (2) sensors INERT during resize, (3) disabled=true'
-      });
-    }
-    
-    if ((isBeingResized || isResizing) && willApplyTransform) {
-      console.error('❌ CRITICAL: Transform applied during resize!', { willApplyTransform });
-    }
-  }, [item.id, item.label, isBeingResized, isResizing, allowDrag, listenersOnState, isDragging, transform]);
-
-  // Calculate position and height based on duration - using dynamic slot height
-  const topPosition = minutesToPixels(item.startMinutes, pixelsPerSlot);
-  const duration = item.duration || 30; // Default to 30 minutes if not specified
-  const height = minutesToPixels(duration, pixelsPerSlot);
-  
-  // Apply transform for dragging
-  // CRITICAL: Only apply transform when actually dragging AND drag is allowed
-  const style = {
-    top: `${topPosition}px`,
-    height: `${height}px`,
-    transform: (isDragging && allowDrag && transform) 
-      ? `translate3d(${transform.x}px, ${transform.y}px, 0)` 
-      : undefined, // Gate transform to prevent animation during resize
-    opacity: (isDragging && allowDrag) ? 0.3 : 1,
-  };
-
-  // Calculate end time for display
-  const endMinutes = item.startMinutes + duration;
-
-  return (
-    <div
-      ref={setNodeRef}
-      {...attributes}
-      {...listenersOnState}  // StackOverflow pattern: only spread when allowDrag=true
-      className={`absolute left-20 right-2 ${item.color} text-white px-3 py-2 rounded shadow-lg ${allowDrag ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'} z-10 flex flex-col justify-between overflow-visible`}
-      style={style}
-      data-event-id={item.id}
-      data-allow-drag={allowDrag}
-    >
-      <div>
-      <div className="font-semibold text-sm">{item.label}</div>
-        <div className="text-xs opacity-90">
-          {formatTime(item.startMinutes)} - {formatTime(endMinutes)}
-        </div>
-      </div>
-      {duration > 30 && (
-        <div className="text-xs opacity-75 text-right">
-          {duration} min
-        </div>
-      )}
-
-      {/* ========================================
-          RESIZE HANDLES - Top and Bottom edges only
-          CRITICAL: Only the small nub area triggers resize, not the full width
-          This allows clicking the event body for drag without interference
-      ======================================== */}
-      {onResizeStart && !isBeingResized && (
-        <>
-          {/* Top resize handle - only the nub is interactive */}
-          <div
-            data-resize="start"
-            className="absolute left-1/2 -translate-x-1/2 top-0 w-12 h-3 cursor-ns-resize hover:bg-white hover:bg-opacity-20 transition-colors z-20 -mt-1 rounded-t"
-            onMouseDown={(e) => {
-              e.stopPropagation();
-              e.preventDefault();
-              onResizeStart(item, 'start', e.clientY);
-            }}
-          >
-            {/* Visual nub */}
-            <div className="absolute left-1/2 -translate-x-1/2 top-0.5 w-8 h-1 rounded bg-white opacity-70 pointer-events-none" />
-          </div>
-
-          {/* Bottom resize handle - only the nub is interactive */}
-          <div
-            data-resize="end"
-            className="absolute left-1/2 -translate-x-1/2 bottom-0 w-12 h-3 cursor-ns-resize hover:bg-white hover:bg-opacity-20 transition-colors z-20 -mb-1 rounded-b"
-            onMouseDown={(e) => {
-              e.stopPropagation();
-              e.preventDefault();
-              onResizeStart(item, 'end', e.clientY);
-            }}
-          >
-            {/* Visual nub */}
-            <div className="absolute left-1/2 -translate-x-1/2 bottom-0.5 w-8 h-1 rounded bg-white opacity-70 pointer-events-none" />
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-</file>
-
-<file path="src/components/Calendar/ScheduledItemPreview.jsx">
-import { minutesToPixels, formatTime, snapToIncrement } from '../../utils/time';
-
-// ========================================
-// COMPONENT: ScheduledItemPreview (non-interactive preview during resize)
-// PHASE 2 FIX: Separate component that doesn't call useDraggable
-// ========================================
-
-export default function ScheduledItemPreview({ item, pixelsPerSlot }) {
-  const topPosition = minutesToPixels(item.startMinutes, pixelsPerSlot);
-  const duration = item.duration || 30;
-  const height = minutesToPixels(duration, pixelsPerSlot);
-  
-  // For display during resize, show nearest snapped times
-  // This doesn't affect the actual draft values, only the label
-  const displayStartMinutes = snapToIncrement(item.startMinutes);
-  const displayEndMinutes = snapToIncrement(item.startMinutes + duration);
-  const displayDuration = Math.max(0, displayEndMinutes - displayStartMinutes);
-
-  return (
-    <div
-      className={`absolute left-20 right-2 ${item.color} text-white px-3 py-2 rounded shadow-lg z-10 flex flex-col justify-between overflow-visible`}
-      style={{
-        top: `${topPosition}px`,
-        height: `${height}px`,
-      }}
-      data-preview="true"
-    >
-      <div>
-        <div className="font-semibold text-sm">{item.label}</div>
-        <div className="text-xs opacity-90">
-          {formatTime(displayStartMinutes)} - {formatTime(displayEndMinutes)}
-        </div>
-      </div>
-      {displayDuration > 30 && (
-        <div className="text-xs opacity-75 text-right">
-          {displayDuration} min
-        </div>
-      )}
-      
-      {/* Visual resize handle nubs (non-interactive, just for visual consistency) */}
-      <div className="absolute left-1/2 -translate-x-1/2 top-0 w-12 h-3 z-20 -mt-1 pointer-events-none">
-        <div className="absolute left-1/2 -translate-x-1/2 top-0.5 w-8 h-1 rounded bg-white opacity-70" />
-      </div>
-      <div className="absolute left-1/2 -translate-x-1/2 bottom-0 w-12 h-3 z-20 -mb-1 pointer-events-none">
-        <div className="absolute left-1/2 -translate-x-1/2 bottom-0.5 w-8 h-1 rounded bg-white opacity-70" />
-      </div>
-    </div>
-  );
-}
-</file>
-
-<file path="src/components/DateMenu.jsx">
-// src/components/DateMenu.jsx
-import { useEffect, useRef, useState } from 'react';
-import { DayPicker } from 'react-day-picker';
-import 'react-day-picker/dist/style.css';
-import { format } from 'date-fns';
-
-export default function DateMenu({
-  date,
-  onChange,   // (Date) => void
-  onPrev,     // () => void (shift window left)
-  onNext,     // () => void (shift window right)
-  onToday,    // () => void
-  showArrows = true,
-  showToday = true,
-  className = '',
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef(null);
-
-  useEffect(() => {
-    const handle = (e) => {
-      if (!open) return;
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
-    };
-    const onEsc = (e) => e.key === 'Escape' && setOpen(false);
-    document.addEventListener('mousedown', handle);
-    document.addEventListener('keydown', onEsc);
-    return () => {
-      document.removeEventListener('mousedown', handle);
-      document.removeEventListener('keydown', onEsc);
-    };
-  }, [open]);
-
-  const label = format(date, 'EEE, MMM d');
-
-  // Reversed styling to match DateNav
-  const btn = "rounded-lg border px-2 py-1 transition shadow-sm font-medium bg-gray-800/60 dark:bg-gray-800/60 border-gray-600 dark:border-gray-600 text-gray-100 dark:text-gray-100 hover:bg-transparent hover:border-gray-300 dark:hover:border-gray-600";
-  const bigBtn = "flex items-center gap-2 rounded-lg border px-3 py-2 transition shadow font-semibold bg-gray-800/60 dark:bg-gray-800/60 border-gray-600 dark:border-gray-600 text-gray-100 dark:text-gray-100 hover:bg-transparent hover:border-gray-300 dark:hover:border-gray-600";
-
-  return (
-    <div ref={ref} className={`relative flex items-center justify-center gap-2 ${className}`}>
-      {showArrows && (
-        <button
-          aria-label="Previous window"
-          onClick={onPrev}
-          className={btn}
-        >
-          ←
-        </button>
-      )}
-
-      <button
-        aria-label="Open date picker"
-        onClick={() => setOpen((v) => !v)}
-        className={bigBtn}
-      >
-        <span>{label}</span>
-        <span className="text-xs opacity-70">▼</span>
-      </button>
-
-      {showArrows && (
-        <button
-          aria-label="Next window"
-          onClick={onNext}
-          className={btn}
-        >
-          →
-        </button>
-      )}
-
-      {showToday && (
-        <button
-          aria-label="Today"
-          onClick={onToday}
-          className={`${btn} text-xs`}
-        >
-          Today
-        </button>
-      )}
-
-      {open && (
-        <div className="absolute z-50 top-[110%] left-1/2 -translate-x-1/2 rounded-lg border border-gray-600 dark:border-gray-600 bg-white dark:bg-gray-900 p-4 shadow-2xl">
-          <DayPicker
-            mode="single"
-            selected={date}
-            onSelect={(d) => { if (d) { onChange?.(d); setOpen(false); } }}
-            weekStartsOn={1}
-            showOutsideDays
-            fixedWeeks
-            captionLayout="dropdown-buttons"
-          />
-        </div>
-      )}
-    </div>
-  );
-}
-</file>
-
-<file path="src/components/DateStrip.jsx">
-// src/components/DateStrip.jsx
-import { formatISO } from 'date-fns';
-import DateMenu from './DateMenu';
-
-export default function DateStrip({
-  days,                // Date[] for the visible window
-  onChangeDay,         // (index: number, newDate: Date) => void
-  onPrevWindow,        // () => void
-  onNextWindow,        // () => void
-  onToday,             // () => void
-  viewMode,            // 'day' | '3day' | 'week'
-}) {
-  const cols = viewMode === 'week' ? 'grid-cols-5' : viewMode === '3day' ? 'grid-cols-3' : 'grid-cols-1';
-
-  return (
-    <div className={`grid ${cols} gap-3 items-center`}>
-      {days.map((d, i) => (
-        <DateMenu
-          key={formatISO(d, { representation: 'date' }) + '-' + i}
-          date={d}
-          onChange={(newDate) => onChangeDay(i, newDate)}
-          onPrev={onPrevWindow}
-          onNext={onNextWindow}
-          onToday={onToday}
-          showArrows={i === 0} // Only show arrows on first menu
-          showToday={i === 0}   // Only show Today on first menu
-        />
-      ))}
-    </div>
-  );
-}
-</file>
-
 <file path="src/components/DnD/DndEventMonitor.jsx">
 import { useDndMonitor } from '@dnd-kit/core';
 
@@ -2955,6 +1761,27 @@ export default function DndEventMonitor({ isResizing }) {
   });
   
   return null; // This component only monitors, doesn't render anything
+}
+</file>
+
+<file path="src/components/HamburgerButton.jsx">
+// src/components/HamburgerButton.jsx
+import { layoutStore } from '../state/layoutStore';
+
+export default function HamburgerButton() {
+  return (
+    <button
+      aria-label="Toggle menu"
+      onClick={() => layoutStore.toggle()}
+      className="inline-flex items-center justify-center rounded-lg border px-2.5 py-2 hover:bg-neutral-800/40 transition shadow-sm"
+    >
+      <span className="sr-only">Toggle menu</span>
+      {/* simple hamburger icon */}
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+      </svg>
+    </button>
+  );
 }
 </file>
 
@@ -3246,58 +2073,6 @@ export default function EventEditorModal({ isOpen, editingEvent, onSave, onCance
 }
 </file>
 
-<file path="src/components/Modals/Modal.jsx">
-// ========================================
-// COMPONENT: Modal (reusable confirmation dialog)
-// ========================================
-
-export default function Modal({ 
-  isOpen, 
-  title, 
-  children, 
-  onConfirm, 
-  onCancel, 
-  confirmText = "Allow",
-  cancelText = "Cancel"
-}) {
-  if (!isOpen) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      {/* Overlay */}
-      <div 
-        className="absolute inset-0 bg-black bg-opacity-50"
-        onClick={onCancel}
-      ></div>
-      
-      {/* Modal Content */}
-      <div className="relative bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4 z-10">
-        <h2 className="text-xl font-bold text-gray-800 mb-4">{title}</h2>
-        <div className="text-gray-600 mb-6">{children}</div>
-        
-        {/* Action Buttons */}
-        <div className="flex gap-3 justify-end">
-          {cancelText && (
-            <button
-              onClick={onCancel}
-              className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition-colors font-medium"
-            >
-              {cancelText}
-            </button>
-          )}
-          <button
-            onClick={onConfirm}
-            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors font-medium"
-          >
-            {confirmText}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-</file>
-
 <file path="src/components/Modals/TypeManagerModal.jsx">
 import React from 'react';
 import { COLOR_OPTIONS } from '../../constants/colors';
@@ -3474,6 +2249,232 @@ export default function TypeManagerModal({ isOpen, types, onSave, onDelete, onCl
 }
 </file>
 
+<file path="src/components/MultiDayCalendar.jsx">
+// src/components/MultiDayCalendar.jsx
+import { formatISO, format } from 'date-fns';
+
+/**
+ * MultiDayCalendar renders N CalendarGrid columns, one per day in `days`.
+ * It namespaces all droppable/drag ids per-day so multiple grids can coexist in the same DnD context.
+ *
+ * Props:
+ * - days: Date[]                 // ordered days for the current view (1|3|5 entries)
+ * - CalendarGrid: ReactComponent // your existing CalendarGrid component
+ * - gridProps: object            // common props for all grids (hour range, slotHeight, zoom, etc.)
+ * - onDropToDay: (day, payload) => void
+ *      Called when an item is dropped into a day's grid. Payload contains whatever your CalendarGrid emits
+ * - onResizeOnDay: (day, payload) => void
+ *      Called when an event is resized in a day's grid
+ * - getEventsForDay: (dateKey) => Event[]
+ *      Function to get events for a specific day
+ */
+export default function MultiDayCalendar({
+  days,
+  CalendarGrid,
+  gridProps,
+  onDropToDay,
+  onResizeOnDay,
+  getEventsForDay,
+}) {
+  const cols =
+    days.length === 5 ? 'grid-cols-5' :
+    days.length === 3 ? 'grid-cols-3' : 'grid-cols-1';
+
+  return (
+    <div className={`grid ${cols} gap-0 h-full rounded-lg border border-gray-300 bg-white divide-x divide-gray-300 overflow-hidden`}>
+      {days.map((day, idx) => {
+        const dayKey = formatISO(day, { representation: 'date' }); // YYYY-MM-DD
+        const idNamespace = `day:${dayKey}`; // namespace for droppables/draggables
+
+        // Get events for this specific day
+        const dayItems = getEventsForDay ? getEventsForDay(dayKey) : 
+          (gridProps.scheduledItems || []).filter(item => {
+            // Fallback: filter from scheduledItems if getEventsForDay not provided
+            if (!item.dateKey) return dayKey === formatISO(days[0], { representation: 'date' });
+            return item.dateKey === dayKey;
+          });
+
+        return (
+          <div key={dayKey} className="flex flex-col min-w-0">
+            {/* Day header */}
+            <div className="px-3 py-2 bg-gray-100 border-b border-gray-200">
+              <h3 className="text-sm font-semibold text-gray-800 text-center">
+                {format(day, 'EEE, MMM d')}
+              </h3>
+            </div>
+            
+            {/* Calendar grid for this day */}
+            <div className="flex-1 overflow-y-auto no-scrollbar">
+              <CalendarGrid
+                {...gridProps}
+                scheduledItems={dayItems} // Override with day-filtered items
+                // NEW: scope each grid to a single day
+                dayDate={day}
+                dayKey={dayKey}
+                idNamespace={idNamespace}
+                // When a drop happens in this grid, bubble up with the day info
+                onDrop={(payload) => onDropToDay?.(day, { ...payload, dayKey })}
+                onResize={(payload) => onResizeOnDay?.(day, { ...payload, dayKey })}
+              />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+</file>
+
+<file path="src/components/SplitPane.jsx">
+// src/components/SplitPane.jsx
+import React, { useEffect, useRef } from 'react';
+import { layoutStore } from '../state/layoutStore';
+
+function useLayout() {
+  const [, force] = React.useReducer(x => x + 1, 0);
+  useEffect(() => layoutStore.subscribe(force), []);
+  return layoutStore.get();
+}
+
+/**
+ * SplitPane
+ * Props:
+ *   left: ReactNode
+ *   right: ReactNode
+ *   collapseThresholdPx = 40   // auto-close if narrower on release
+ *   minPx = 160                // soft minimum while dragging (still can close)
+ */
+export default function SplitPane({
+  left,
+  right,
+  collapseThresholdPx = 40,
+  minPx = 160,
+}) {
+  const containerRef = useRef(null);
+  const handleRef = useRef(null);
+  const { sidebarOpen, sidebarWidthPx, containerWidthPx } = useLayout();
+
+  // Measure container via ResizeObserver and push into store
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      const w = Math.round(entry.contentRect.width);
+      layoutStore.setContainerWidthPx(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Pointer capture based drag
+  useEffect(() => {
+    const handle = handleRef.current;
+    if (!handle) return;
+
+    const onPointerDown = (e) => {
+      // Left click or primary touch
+      handle.setPointerCapture(e.pointerId);
+      layoutStore.setResizing(true);
+      const startX = e.clientX;
+      const startPx = layoutStore.get().sidebarWidthPx;
+      const cw = layoutStore.get().containerWidthPx || containerRef.current?.clientWidth || 0;
+      const maxPx = Math.round(cw * 0.5);
+
+      const onPointerMove = (ev) => {
+        if (!handle.hasPointerCapture(ev.pointerId)) return;
+        const dx = ev.clientX - startX;
+        let next = startPx + dx;
+        // allow sliding from closed to open
+        if (!layoutStore.get().sidebarOpen && next > 0) {
+          layoutStore.setOpen(true);
+        }
+        // soft min (minPx) but allow going below to hit "close"
+        next = Math.max(0, next);
+        layoutStore.setWidthPx(Math.min(next, maxPx || next));
+      };
+
+      const onPointerUp = (ev) => {
+        if (handle.hasPointerCapture(ev.pointerId)) handle.releasePointerCapture(ev.pointerId);
+        layoutStore.setResizing(false);
+        const px = layoutStore.get().sidebarWidthPx;
+        if (px < collapseThresholdPx) {
+          layoutStore.setOpen(false);
+          layoutStore.setWidthPx(minPx); // keep a sensible width for next open
+        } else {
+          layoutStore.setOpen(true);
+        }
+        handle.removeEventListener('pointermove', onPointerMove);
+        handle.removeEventListener('pointerup', onPointerUp);
+        handle.removeEventListener('pointercancel', onPointerUp);
+      };
+
+      handle.addEventListener('pointermove', onPointerMove);
+      handle.addEventListener('pointerup', onPointerUp);
+      handle.addEventListener('pointercancel', onPointerUp);
+    };
+
+    handle.addEventListener('pointerdown', onPointerDown);
+    return () => handle.removeEventListener('pointerdown', onPointerDown);
+  }, [collapseThresholdPx, minPx]);
+
+  // Compute styles: flex-basis in px (no width/flex conflicts)
+  const leftStyle = sidebarOpen
+    ? { flex: `0 0 ${sidebarWidthPx}px` }
+    : { flex: '0 0 0px' };
+
+  return (
+    <div ref={containerRef} className="relative flex w-full h-full overflow-hidden">
+      {/* LEFT */}
+      <div
+        className={`h-full transition-[flex-basis] duration-150 ease-out`}
+        style={leftStyle}
+      >
+        <div className={`h-full ${sidebarOpen ? '' : '-translate-x-full'} transition-transform duration-150`}>
+          {left}
+        </div>
+      </div>
+
+      {/* DIVIDER / RESIZER */}
+      <div
+        ref={handleRef}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize menu"
+        tabIndex={0}
+        className="
+          z-30 h-full w-3 shrink-0 cursor-col-resize
+          bg-transparent hover:bg-neutral-800/40 active:bg-neutral-800/60
+          touch-none select-none
+        "
+        onKeyDown={(e) => {
+          const step = 24; // px step with keyboard
+          if (e.key === 'ArrowLeft') {
+            e.preventDefault();
+            layoutStore.setWidthPx(layoutStore.get().sidebarWidthPx - step);
+            if (layoutStore.get().sidebarWidthPx <= 0) layoutStore.setOpen(false);
+          } else if (e.key === 'ArrowRight') {
+            e.preventDefault();
+            if (!layoutStore.get().sidebarOpen) layoutStore.setOpen(true);
+            layoutStore.setWidthPx(layoutStore.get().sidebarWidthPx + step);
+          } else if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            layoutStore.setOpen(!layoutStore.get().sidebarOpen);
+          } else if (e.key.toLowerCase() === 'escape') {
+            e.preventDefault();
+            layoutStore.setOpen(false);
+          }
+        }}
+      />
+
+      {/* RIGHT (fills remaining space) */}
+      <div className="h-full flex-1 min-w-0">
+        {right}
+      </div>
+    </div>
+  );
+}
+</file>
+
 <file path="src/components/ViewModeToggle.jsx">
 // src/components/ViewModeToggle.jsx
 
@@ -3521,6 +2522,41 @@ export default function ViewModeToggle({ mode, onChange, className = '' }) {
 }
 </file>
 
+<file path="src/config/policies.js">
+// src/config/policies.js
+
+/**
+ * Application behavior policies
+ * Configure how the app handles conflicts and user actions
+ */
+
+// Move policy: how to handle cross-day/cross-time moves
+export const MOVE_POLICY = 'confirm-then-commit';    // 'always' | 'confirm-then-commit'
+
+// Resize policy: how to handle resize operations
+export const RESIZE_POLICY = 'confirm-then-commit'; // 'always' | 'confirm-then-commit'
+
+// Conflict behavior: what to do when overlaps are detected
+export const CONFLICT_BEHAVIOR = 'inform'; // 'allow' | 'inform' | 'auto-shift' (future)
+
+/**
+ * Policy Descriptions:
+ * 
+ * MOVE_POLICY:
+ * - 'always': Moves commit immediately, conflicts shown informationally (if at all)
+ * - 'confirm-then-commit': Shows modal before committing (blocks move)
+ * 
+ * RESIZE_POLICY:
+ * - 'always': Resize commits immediately
+ * - 'confirm-then-commit': Shows modal before committing
+ * 
+ * CONFLICT_BEHAVIOR:
+ * - 'allow': Allow all overlaps without warning
+ * - 'inform': Show informational modal after action (doesn't block)
+ * - 'auto-shift': Automatically adjust times to avoid conflicts (future)
+ */
+</file>
+
 <file path="src/constants/calendar.js">
 // ========================================
 // CALENDAR CONFIGURATION CONSTANTS
@@ -3557,41 +2593,321 @@ export const COLOR_OPTIONS = [
 ];
 </file>
 
-<file path="src/index.css">
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+<file path="src/dev/consoleNoiseFilter.js">
+// src/dev/consoleNoiseFilter.js
+// Dev-only console noise filter & diagnosis for Chrome extension port-close warnings.
 
-/* Hide scrollbar while preserving scroll functionality */
-.no-scrollbar::-webkit-scrollbar {
-  display: none;
-}
-.no-scrollbar {
-  -ms-overflow-style: none;  /* IE/Edge */
-  scrollbar-width: none;      /* Firefox */
+const TARGET_TEXT = "The message port closed before a response was received";
+
+let warnedOnce = false;
+function maybeDiagnosticNote(args) {
+  // If any arg includes a chrome-extension URL, print a one-time hint.
+  const argStr = args.map(String).join(" ");
+  if (!warnedOnce && /chrome-extension:\/\//.test(argStr)) {
+    warnedOnce = true;
+    // eslint-disable-next-line no-console
+    console.info(
+      "[diagnostic] Detected errors originating from a browser extension (chrome-extension://...). " +
+      "They are harmless for your app. To verify, open the Console's stack trace and look for chrome-extension:// URLs, " +
+      "or try disabling extensions one-by-one."
+    );
+  }
 }
 
-body {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+// Wrap only in development
+export function installDevConsoleNoiseFilter() {
+  if (import.meta.env.PROD) return;
+
+  const originalError = console.error.bind(console);
+  console.error = (...args) => {
+    // Filter only the known extension noise; pass everything else through.
+    const first = args[0];
+    const isTarget =
+      typeof first === "string" && first.includes(TARGET_TEXT);
+
+    if (isTarget) {
+      maybeDiagnosticNote(args);
+      return; // swallow this noisy line
+    }
+    originalError(...args);
+  };
+
+  // Also filter global errors/unhandled rejections that surface same message
+  const onErr = (ev) => {
+    if (typeof ev?.message === "string" && ev.message.includes(TARGET_TEXT)) {
+      maybeDiagnosticNote([ev.message, ev.filename]);
+      ev.preventDefault(); // dev-only swallow
+    }
+  };
+  const onRej = (ev) => {
+    const reasonStr = String(ev?.reason ?? "");
+    if (reasonStr.includes(TARGET_TEXT)) {
+      maybeDiagnosticNote([reasonStr]);
+      ev.preventDefault(); // dev-only swallow
+    }
+  };
+
+  window.addEventListener("error", onErr);
+  window.addEventListener("unhandledrejection", onRej);
+
+  // Return an optional disposer if you ever want to uninstall in hot-reload scenarios
+  return () => {
+    console.error = originalError;
+    window.removeEventListener("error", onErr);
+    window.removeEventListener("unhandledrejection", onRej);
+  };
 }
 </file>
 
-<file path="src/main.jsx">
-import React from 'react'
-import ReactDOM from 'react-dom/client'
-import App from './App'
-import './index.css'
+<file path="src/state/eventsStore.js">
+// src/state/eventsStore.js
+import { formatISO } from 'date-fns';
 
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-)
+/**
+ * Event schema (future-friendly):
+ * {
+ *   id: string,
+ *   label: string,              // display name
+ *   dateKey: 'YYYY-MM-DD',      // day partition
+ *   startMinutes: number,       // minutes since day start (e.g., 0 = START_HOUR)
+ *   duration: number,           // duration in minutes
+ *   color?: string,             // Tailwind class
+ *   typeId?: string,            // foreign key to type
+ *   meta?: Record<string, any>, // extensible metadata
+ * }
+ */
+
+function keyOf(date) {
+  return formatISO(date, { representation: 'date' });
+}
+
+export function createEventsStore(initial = []) {
+  let byId = new Map();
+  let byDate = new Map(); // dateKey -> Set<id>
+
+  // Cache store state to avoid infinite loops
+  let cachedState = { byId, byDate };
+
+  const link = (dateKey, id) => {
+    if (!byDate.has(dateKey)) byDate.set(dateKey, new Set());
+    byDate.get(dateKey).add(id);
+  };
+  
+  const unlink = (dateKey, id) => { 
+    byDate.get(dateKey)?.delete(id); 
+  };
+
+  // Seed initial data
+  initial.forEach((e) => {
+    byId.set(e.id, e);
+    link(e.dateKey || keyOf(new Date()), e.id);
+  });
+
+  const subscribers = new Set();
+  const notify = () => {
+    cachedState = { byId, byDate };
+    subscribers.forEach((fn) => fn(cachedState));
+  };
+
+  const get = () => cachedState;
+
+  const subscribe = (fn) => { 
+    subscribers.add(fn); 
+    return () => subscribers.delete(fn); 
+  };
+
+  const upsertEvent = (e) => {
+    const prev = byId.get(e.id);
+    byId.set(e.id, e);
+    if (prev?.dateKey !== e.dateKey) {
+      if (prev) unlink(prev.dateKey, e.id);
+      link(e.dateKey, e.id);
+    } else if (!prev) {
+      link(e.dateKey, e.id);
+    }
+    notify();
+  };
+
+  const moveEventToDay = (id, newDateKey, patch = {}) => {
+    const prev = byId.get(id);
+    if (!prev) return;
+    const next = { ...prev, ...patch, dateKey: newDateKey };
+    byId.set(id, next);
+    if (prev.dateKey !== newDateKey) {
+      unlink(prev.dateKey, id);
+      link(newDateKey, id);
+    }
+    notify();
+  };
+
+  const updateEventTime = (id, startMinutes, duration, patch = {}) => {
+    const prev = byId.get(id);
+    if (!prev) return;
+    byId.set(id, { ...prev, startMinutes, duration, ...patch });
+    notify();
+  };
+
+  const removeEvent = (id) => {
+    const prev = byId.get(id);
+    if (!prev) return;
+    byId.delete(id);
+    unlink(prev.dateKey, id);
+    notify();
+  };
+
+  const getEventsForDate = (dateKey) => {
+    const ids = byDate.get(dateKey);
+    if (!ids) return [];
+    return Array.from(ids).map((id) => byId.get(id)).filter(Boolean);
+  };
+
+  const findConflictsSameDay = (dateKey, startMinutes, duration, excludeId = null) => {
+    const events = getEventsForDate(dateKey);
+    const endMinutes = startMinutes + duration;
+    return events.filter((e) => {
+      if (e.id === excludeId) return false;
+      const eEnd = e.startMinutes + e.duration;
+      return !(eEnd <= startMinutes || e.startMinutes >= endMinutes);
+    });
+  };
+
+  const getAllEvents = () => Array.from(byId.values());
+
+  return {
+    keyOf,
+    get, 
+    subscribe,
+    upsertEvent, 
+    moveEventToDay, 
+    updateEventTime, 
+    removeEvent,
+    getEventsForDate, 
+    findConflictsSameDay,
+    getAllEvents,
+  };
+}
+
+export const eventsStore = createEventsStore();
+</file>
+
+<file path="src/state/layoutStore.js">
+// src/state/layoutStore.js
+const KEY_WIDTH_PX = 'tb.sidebarWidthPx';
+const KEY_OPEN = 'tb.sidebarOpen';
+
+function readPx(defaultPx = 320) {
+  const n = Number(localStorage.getItem(KEY_WIDTH_PX));
+  return Number.isFinite(n) ? Math.max(0, n) : defaultPx;
+}
+function readOpen() {
+  const v = localStorage.getItem(KEY_OPEN);
+  return v === null ? true : v === 'true';
+}
+
+export function createLayoutStore() {
+  let sidebarOpen = readOpen();
+  let sidebarWidthPx = readPx();       // authoritative width in px
+  let containerWidthPx = 0;            // measured by SplitPane
+  let isResizingSidebar = false;
+
+  const subs = new Set();
+  const get = () => ({ sidebarOpen, sidebarWidthPx, containerWidthPx, isResizingSidebar });
+  const notify = () => subs.forEach(fn => fn(get()));
+  const subscribe = (fn) => { subs.add(fn); return () => subs.delete(fn); };
+
+  const setOpen = (open) => { sidebarOpen = !!open; localStorage.setItem(KEY_OPEN, String(sidebarOpen)); notify(); };
+  const toggle = () => setOpen(!sidebarOpen);
+
+  const setContainerWidthPx = (px) => { 
+    containerWidthPx = Math.max(0, px|0); 
+    // clamp current width to max 50% whenever container changes
+    const maxPx = Math.round(containerWidthPx * 0.5);
+    if (sidebarWidthPx > maxPx) sidebarWidthPx = maxPx;
+    notify();
+  };
+
+  const setWidthPx = (px) => {
+    const maxPx = Math.round(containerWidthPx * 0.5);
+    const clamped = Math.max(0, Math.min(px|0, maxPx || px|0)); // allow before measure
+    sidebarWidthPx = clamped;
+    localStorage.setItem(KEY_WIDTH_PX, String(sidebarWidthPx));
+    notify();
+  };
+
+  const setResizing = (v) => { isResizingSidebar = !!v; notify(); };
+
+  return {
+    get, subscribe,
+    setOpen, toggle, setWidthPx, setContainerWidthPx, setResizing,
+  };
+}
+
+export const layoutStore = createLayoutStore();
+</file>
+
+<file path="src/state/uiStore.js">
+// src/state/uiStore.js
+
+/**
+ * UI Session Store
+ * Tracks ephemeral UI state for drag/resize operations
+ * Does not persist - resets on page refresh
+ */
+export function createUiStore() {
+  // dragOverNamespace: string | null  e.g. 'day:2025-10-15'
+  // activeResize: { eventId, dayKey, draftStart, draftDuration } | null
+  let dragOverNamespace = null;
+  let activeResize = null;
+
+  // Cache state to prevent infinite loops
+  let cachedState = { dragOverNamespace, activeResize };
+
+  const subs = new Set();
+  const get = () => cachedState;
+  const subscribe = (fn) => { subs.add(fn); return () => subs.delete(fn); };
+  const notify = () => {
+    cachedState = { dragOverNamespace, activeResize };
+    subs.forEach((fn) => fn(cachedState));
+  };
+
+  const setDragOverNs = (ns) => { 
+    dragOverNamespace = ns; 
+    notify(); 
+  };
+  
+  const clearDragOverNs = () => { 
+    dragOverNamespace = null; 
+    notify(); 
+  };
+
+  const beginResize = ({ eventId, dayKey, draftStart, draftDuration }) => {
+    activeResize = { eventId, dayKey, draftStart, draftDuration };
+    notify();
+  };
+  
+  const updateResizeDraft = (patch) => {
+    if (!activeResize) return;
+    activeResize = { ...activeResize, ...patch };
+    notify();
+  };
+  
+  const endResize = () => { 
+    activeResize = null; 
+    notify(); 
+  };
+
+  return {
+    get, 
+    subscribe,
+    setDragOverNs, 
+    clearDragOverNs,
+    beginResize, 
+    updateResizeDraft, 
+    endResize,
+  };
+}
+
+export const uiStore = createUiStore();
 </file>
 
 <file path="src/utils/diagnostics.js">
@@ -3627,28 +2943,6 @@ export function trackScheduledItemRender(itemId) {
       frameCheckScheduled = false;
     });
   }
-}
-</file>
-
-<file path="src/utils/overlap.js">
-// ========================================
-// OVERLAP DETECTION UTILITY
-// ========================================
-
-// Check if a new event overlaps with any existing events
-export function checkOverlap(newEvent, existingEvents) {
-  const newStart = newEvent.startMinutes;
-  const newEnd = newEvent.startMinutes + (newEvent.duration || 30);
-  
-  const overlappingEvents = existingEvents.filter(existing => {
-    const existingStart = existing.startMinutes;
-    const existingEnd = existing.startMinutes + (existing.duration || 30);
-    
-    // Overlap condition: new.start < existing.end AND new.end > existing.start
-    return newStart < existingEnd && newEnd > existingStart;
-  });
-  
-  return overlappingEvents;
 }
 </file>
 
@@ -3760,33 +3054,785 @@ export default defineConfig({
 })
 </file>
 
-<file path="package.json">
-{
-  "name": "timeblocks-experiment",
-  "version": "1.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "@dnd-kit/core": "^6.1.0",
-    "@dnd-kit/modifiers": "^9.0.0",
-    "date-fns": "^4.1.0",
-    "react": "^18.2.0",
-    "react-day-picker": "^9.11.1",
-    "react-dom": "^18.2.0"
-  },
-  "devDependencies": {
-    "@types/react": "^18.2.43",
-    "@types/react-dom": "^18.2.17",
-    "@vitejs/plugin-react": "^4.2.1",
-    "autoprefixer": "^10.4.16",
-    "postcss": "^8.4.32",
-    "tailwindcss": "^3.3.6",
-    "vite": "^5.0.8"
-  }
+<file path="README.md">
+# TimeBlocks Experiment
+
+An experimental time-blocking calendar built with React and @dnd-kit/core.
+
+## Features
+
+- **Drag & Drop**: Drag task blocks from the left panel onto the calendar
+- **15-Minute Snapping**: Tasks automatically snap to 15-minute increments
+- **Rearrange**: Move tasks around within the calendar to reschedule
+- **Reusable Tasks**: Task templates remain in the left panel after dragging (they're copied, not moved)
+- **Visual Time Grid**: Clear hourly and half-hourly divisions from 8 AM to 5 PM
+
+## Getting Started
+
+1. **Install dependencies:**
+   ```bash
+   npm install
+   ```
+
+2. **Run development server:**
+   ```bash
+   npm run dev
+   ```
+
+3. **Open your browser:**
+   Navigate to the URL shown in the terminal (usually `http://localhost:5173`)
+
+## How It Works
+
+### Architecture
+
+- **DndContext**: Wraps the entire app to enable drag-and-drop functionality
+- **Task Templates**: Left panel contains draggable task blocks
+- **Calendar Grid**: Right panel displays a time-based grid with 15-minute slots
+- **Scheduled Items**: Dropped tasks that appear in the calendar
+
+### Key Components
+
+- `TaskBlock`: Visual representation of a task
+- `DraggableTaskBlock`: Wrapper that makes task templates draggable
+- `ScheduledItem`: Tasks that have been placed in the calendar (also draggable)
+- `CalendarGrid`: The time grid with drop zone functionality
+
+### Snapping Logic
+
+The app converts between pixels and time:
+- Each hour = 80 pixels
+- Drag position → minutes from start → rounded to nearest 15-minute slot
+- Position is clamped to calendar bounds (8 AM - 5 PM)
+
+## Technologies
+
+- React 18
+- @dnd-kit/core 6.x (drag-and-drop library)
+- Tailwind CSS (styling)
+- Vite (build tool)
+
+## Extending
+
+To add new task types, modify the `TASK_TEMPLATES` array in `src/App.jsx`:
+
+```javascript
+const TASK_TEMPLATES = [
+  { id: 'workout', label: 'Workout', color: 'bg-blue-500' },
+  // Add more tasks here
+];
+```
+
+To change calendar hours, modify `START_HOUR` and `END_HOUR` constants.
+
+## Development
+
+### Dev console noise: "The message port closed before a response was received"
+
+In Chrome, this warning typically comes from an extension (React DevTools, password managers, ad blockers) when a message port closes early.  
+
+We install a **dev-only** filter that hides just this line and prints a one-time diagnostic hint if `chrome-extension://` appears in the stack.  
+
+**Production builds are unaffected.** To fully eliminate the warning, disable or remove the offending extension.
+
+The filter is installed automatically in `src/main.jsx` and only active in development mode.
+
+## License
+
+MIT - Free to use and modify
+</file>
+
+<file path="src/components/Calendar/CalendarGrid.jsx">
+import React, { useSyncExternalStore } from 'react';
+import { useDroppable } from '@dnd-kit/core';
+import { START_HOUR, END_HOUR, MINUTES_PER_SLOT, DEFAULT_PIXELS_PER_SLOT, MIN_PIXELS_PER_SLOT, MAX_PIXELS_PER_SLOT } from '../../constants/calendar';
+import { generateTimeSlots, minutesToPixels } from '../../utils/time';
+import { computeEventLayout } from '../../utils/overlap';
+import ScheduledItem from './ScheduledItem';
+import ScheduledItemPreview from './ScheduledItemPreview';
+import GhostEvent from './GhostEvent';
+import { uiStore } from '../../state/uiStore';
+
+// Hook to consume UI store
+function useUi() {
+  return useSyncExternalStore(uiStore.subscribe, uiStore.get, uiStore.get);
+}
+
+// ========================================
+// COMPONENT: CalendarGrid (time slots + drop zone)
+// ========================================
+
+/**
+ * NEW PROPS (optional, for multi-day support):
+ * - dayDate: Date         // The date this grid represents
+ * - dayKey: string        // ISO date key 'YYYY-MM-DD' for persistence/queries
+ * - idNamespace: string   // unique prefix to namespace droppable IDs (e.g. 'day:2025-10-15')
+ * - onDrop: (payload) => void  // callback when an item is dropped in this grid
+ */
+export default function CalendarGrid({ 
+  scheduledItems, 
+  ghostPosition, 
+  pixelsPerSlot, 
+  onZoom, 
+  calendarDomRef, 
+  resizeDraft, 
+  onResizeStart, 
+  isResizing,
+  conflictUi, // Conflict UI state: { liveConflict, dayKey, draftCandidate, movingId }
+  // New props for multi-day support (optional)
+  dayDate,
+  dayKey,
+  idNamespace,
+  onDrop,
+}) {
+  console.log('🔲 CalendarGrid RENDER:', {
+    dayKey,
+    scheduledItemsCount: scheduledItems?.length || 0,
+    hasGhost: !!ghostPosition,
+    hasResizeDraft: !!resizeDraft,
+  });
+  
+  const timeSlots = generateTimeSlots();
+  const calendarHeight = (END_HOUR - START_HOUR) * 60 * (pixelsPerSlot / MINUTES_PER_SLOT);
+  
+  const containerRef = React.useRef(null);
+  const [isDragging, setIsDragging] = React.useState(false);
+  const [dragStart, setDragStart] = React.useState({ x: 0, y: 0, scrollTop: 0 });
+
+  // Consume UI store for drag/resize state
+  const ui = useUi();
+  
+  // Only show ghost in this grid if it's currently hovered
+  const isHoveringThisGrid = idNamespace ? (ui.dragOverNamespace === idNamespace) : true;
+  
+  // Only show resize draft if it's for this day
+  const showResizeDraft = resizeDraft && (!idNamespace || resizeDraft.dateKey === dayKey);
+  
+  // Check if this day column has a conflict
+  const isConflictDay = conflictUi && conflictUi.liveConflict && conflictUi.dayKey === dayKey;
+
+  // ========================================
+  // GOOGLE CALENDAR-STYLE HORIZONTAL LAYOUT
+  // ========================================
+  
+  // Compute horizontal positioning for overlapping events
+  const layout = React.useMemo(() => {
+    console.log('📊 CalendarGrid computing layout for', scheduledItems.length, 'items');
+    const result = computeEventLayout(scheduledItems);
+    console.log('📊 Layout result:', result);
+    return result;
+  }, [scheduledItems]);
+  
+  // Optional: Enable to see debug labels on events
+  const showDebugLabels = true; // Set to true for debugging
+
+  // Make the entire calendar a droppable zone
+  // Use namespaced ID if provided (multi-day), otherwise 'calendar' (single-day backward compat)
+  const droppableId = idNamespace ? `${idNamespace}::calendar` : 'calendar';
+  
+  const { setNodeRef } = useDroppable({
+    id: droppableId,
+    data: {
+      dayKey: dayKey || null,
+      dayDate: dayDate || null,
+    },
+  });
+
+  // ========================================
+  // ZOOM FUNCTIONALITY (Mouse Wheel)
+  // ========================================
+  const handleWheel = React.useCallback((e) => {
+    // Check if scrolling vertically (normal scroll) or zooming (Ctrl+wheel or pinch)
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      
+      const zoomDelta = -e.deltaY * 0.1; // Sensitivity adjustment
+      const newPixelsPerSlot = Math.max(
+        MIN_PIXELS_PER_SLOT,
+        Math.min(MAX_PIXELS_PER_SLOT, pixelsPerSlot + zoomDelta)
+      );
+      
+      if (newPixelsPerSlot !== pixelsPerSlot) {
+        onZoom(newPixelsPerSlot);
+      }
+    }
+  }, [pixelsPerSlot, onZoom]);
+
+  // ========================================
+  // DRAG-TO-SCROLL FUNCTIONALITY
+  // ========================================
+  const handleMouseDown = React.useCallback((e) => {
+    // Don't start scroll-drag if currently resizing an event
+    if (isResizing) return;
+    
+    // Only initiate drag-to-scroll with middle mouse or when not on an event
+    if (e.button === 1 || (e.button === 0 && e.target === containerRef.current)) {
+      setIsDragging(true);
+      setDragStart({
+        x: e.clientX,
+        y: e.clientY,
+        scrollTop: containerRef.current?.parentElement?.scrollTop || 0,
+      });
+      e.preventDefault();
+    }
+  }, [isResizing]);
+
+  const handleMouseMove = React.useCallback((e) => {
+    if (!isDragging || !containerRef.current?.parentElement) return;
+    
+    const deltaY = e.clientY - dragStart.y;
+    const newScrollTop = dragStart.scrollTop - deltaY;
+    
+    containerRef.current.parentElement.scrollTop = newScrollTop;
+  }, [isDragging, dragStart]);
+
+  const handleMouseUp = React.useCallback(() => {
+    if (isDragging) {
+      setIsDragging(false);
+    }
+  }, [isDragging]);
+
+  // Add event listeners
+  React.useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    
+    if (isDragging) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    }
+
+    return () => {
+      container.removeEventListener('wheel', handleWheel);
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [handleWheel, handleMouseMove, handleMouseUp, isDragging]);
+
+  return (
+    <div 
+      ref={(node) => {
+        setNodeRef(node);
+        containerRef.current = node;
+        if (node && calendarDomRef) calendarDomRef.current = node;
+      }}
+      data-droppable-id={droppableId}
+      data-day-key={dayKey || 'default'}
+      className={`relative bg-white ${!idNamespace ? 'border-l border-gray-300' : ''} ${isDragging ? 'cursor-grabbing' : 'cursor-default'} no-scrollbar overflow-x-hidden overscroll-x-contain touch-pan-y`}
+      style={{ height: `${calendarHeight}px`, touchAction: 'pan-y' }}
+      onMouseDown={handleMouseDown}
+      onWheel={(e) => {
+        // Suppress horizontal wheel gestures to prevent panning
+        if (!e.ctrlKey && !e.metaKey && Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+          e.preventDefault();
+        }
+        // Zoom handling continues in handleWheel callback
+      }}
+    >
+      {/* Time labels and grid lines */}
+      {timeSlots.map((slot, index) => {
+        const topPosition = minutesToPixels(slot.minutes, pixelsPerSlot);
+        const lineColor = slot.isHour 
+          ? 'border-gray-400' 
+          : slot.isHalfHour 
+          ? 'border-gray-300' 
+          : 'border-gray-200';
+        
+        return (
+          <div
+            key={index}
+            className={`absolute left-0 right-0 border-t ${lineColor}`}
+            style={{ top: `${topPosition}px` }}
+          >
+            {slot.isHour && (
+              <div className="absolute left-2 -top-3 text-xs text-gray-600 font-medium bg-white px-1">
+                {slot.time}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* Scheduled items - CRITICAL: Skip item being resized to avoid duplicate draggable */}
+      {/* Use per-day keys to prevent React recycling across columns */}
+      {scheduledItems
+        .filter(item => {
+          const isBeingResized = resizeDraft?.id === item.id;
+          return !isBeingResized; // Don't render the real draggable when resizing
+        })
+        .map((item) => {
+          const itemLayout = layout[item.id] || { leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 };
+          return (
+            <ScheduledItem 
+              key={dayKey ? `${item.id}@${dayKey}` : item.id}
+              item={item} 
+              pixelsPerSlot={pixelsPerSlot}
+              onResizeStart={onResizeStart}
+              isBeingResized={false} // Never true here since we filtered it out
+              isResizing={isResizing}
+              isConflicting={false} // Real events don't show conflict (only draft shows visual)
+              layoutStyle={itemLayout}
+              showDebug={showDebugLabels}
+            />
+          );
+        })
+      }
+
+      {/* Live resize draft - shows preview while resizing */}
+      {/* PHASE 2 FIX: Use ScheduledItemPreview (no useDraggable) to avoid duplicate ID */}
+      {/* Only show if this is the active day for resize */}
+      {showResizeDraft && (
+        <div className="pointer-events-none absolute inset-0 z-30">
+          <ScheduledItemPreview
+            key={`preview-${resizeDraft.id}@${dayKey || 'default'}`}
+            item={resizeDraft}
+            pixelsPerSlot={pixelsPerSlot}
+            isConflicting={conflictUi && conflictUi.liveConflict && conflictUi.dayKey === dayKey}
+            layoutStyle={layout[resizeDraft.id] || { leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 }}
+            showDebug={showDebugLabels}
+          />
+        </div>
+      )}
+
+      {/* Ghost/shadow preview - shows where dragged item will land */}
+      {/* Only render ghost in the grid that's currently hovered */}
+      {isHoveringThisGrid && ghostPosition && (
+        <GhostEvent 
+          ghostPosition={ghostPosition} 
+          pixelsPerSlot={pixelsPerSlot}
+          isConflicting={conflictUi && conflictUi.liveConflict && conflictUi.dayKey === dayKey}
+          layoutStyle={{ leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 }}
+          showDebug={showDebugLabels}
+        />
+      )}
+    </div>
+  );
+}
+</file>
+
+<file path="src/components/Calendar/GhostEvent.jsx">
+import { minutesToPixels, formatTime } from '../../utils/time';
+
+// ========================================
+// COMPONENT: GhostEvent (preview of where event will be placed)
+// ========================================
+
+export default function GhostEvent({ 
+  ghostPosition, 
+  pixelsPerSlot, 
+  isConflicting = false,
+  layoutStyle = { leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 },
+  showDebug = false,
+}) {
+  if (!ghostPosition) return null;
+
+  const { startMinutes, task } = ghostPosition;
+  const topPosition = minutesToPixels(startMinutes, pixelsPerSlot);
+  
+  // Calculate height based on task duration - using dynamic slot height
+  const duration = task.duration || 30; // Default 30 minutes
+  const height = minutesToPixels(duration, pixelsPerSlot);
+  
+  // Extract layout positioning
+  const { leftPct, widthPct, columnIndex, overlapCount } = layoutStyle;
+  
+  // Calculate end time for preview
+  const endMinutes = startMinutes + duration;
+
+  return (
+    <div
+      className={`absolute border-2 ${isConflicting ? 'border-red-500 bg-red-500/20' : 'border-gray-400 bg-gray-50 bg-opacity-30'} border-dashed rounded z-20 pointer-events-none px-3 py-2 flex flex-col justify-between`}
+      style={{ 
+        top: `${topPosition}px`,
+        height: `${height}px`,
+        left: `${leftPct}%`,
+        width: `${widthPct}%`,
+      }}
+      data-conflicting={isConflicting}
+    >
+      {/* Optional debug label */}
+      {showDebug && (
+        <div className="absolute top-0 right-0 text-[10px] bg-black/40 px-1 rounded-bl">
+          col {columnIndex} / {overlapCount}
+        </div>
+      )}
+      
+      <div className="text-gray-700 text-sm font-medium">
+        {task.label}
+      </div>
+      <div className="text-gray-600 text-xs">
+        {formatTime(startMinutes)} - {formatTime(endMinutes)}
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="src/components/Calendar/ScheduledItem.jsx">
+import React from 'react';
+import { useDraggable } from '@dnd-kit/core';
+import { trackScheduledItemRender } from '../../utils/diagnostics';
+import { minutesToPixels, formatTime } from '../../utils/time';
+
+// ========================================
+// COMPONENT: ScheduledItem (task placed in calendar)
+// ========================================
+
+export default function ScheduledItem({ 
+  item, 
+  pixelsPerSlot, 
+  onResizeStart, 
+  isBeingResized = false, 
+  isResizing = false, 
+  isConflicting = false,
+  layoutStyle = { leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 },
+  showDebug = false,
+}) {
+  // PHASE 1 DIAGNOSTIC: Track this render
+  trackScheduledItemRender(item.id);
+
+  // ========================================
+  // DRAGGABLE SETUP - Strict gating (disabled + conditional listeners)
+  // ========================================
+  
+  // CRITICAL: allowDrag considers BOTH item-specific AND global resize state
+  const allowDrag = !isBeingResized && !isResizing;
+  
+  const { attributes, listeners, setNodeRef, isDragging, transform } = useDraggable({
+    id: item.id,
+    data: {
+      type: 'scheduled',
+      item,
+    },
+    disabled: !allowDrag, // Hard stop: disabled when ANY resize is active
+  });
+
+  // StackOverflow pattern: Only spread listeners when drag is allowed
+  const listenersOnState = allowDrag ? listeners : undefined;
+
+  // WARNING: isDragging should be false when ANY resize is active
+  React.useEffect(() => {
+    const willApplyTransform = isDragging && allowDrag && !!transform;
+    
+    if ((isBeingResized || isResizing) && isDragging) {
+      console.error('⚠️ ASSERTION WARNING: isDragging=true during resize!', {
+        isBeingResized,
+        isResizing,
+        isDragging,
+        allowDrag,
+        disabled: !allowDrag,
+        listenersAttached: !!listenersOnState,
+        message: 'Check: (1) only one draggable per ID, (2) sensors INERT during resize, (3) disabled=true'
+      });
+    }
+    
+    if ((isBeingResized || isResizing) && willApplyTransform) {
+      console.error('❌ CRITICAL: Transform applied during resize!', { willApplyTransform });
+    }
+  }, [item.id, item.label, isBeingResized, isResizing, allowDrag, listenersOnState, isDragging, transform]);
+
+  // Calculate position and height based on duration - using dynamic slot height
+  const topPosition = minutesToPixels(item.startMinutes, pixelsPerSlot);
+  const duration = item.duration || 30; // Default to 30 minutes if not specified
+  const height = minutesToPixels(duration, pixelsPerSlot);
+  
+  // Extract layout positioning (Google Calendar-style horizontal layout)
+  const { leftPct, widthPct, columnIndex, overlapCount } = layoutStyle;
+  
+  // Debug log for first render
+  React.useEffect(() => {
+    console.log(`📍 ScheduledItem ${item.id} layout:`, {
+      label: item.label,
+      layoutStyle,
+      leftPct,
+      widthPct,
+    });
+  }, [item.id, leftPct, widthPct]);
+  
+  // Apply transform for dragging
+  // CRITICAL: Only apply transform when actually dragging AND drag is allowed
+  const style = {
+    top: `${topPosition}px`,
+    height: `${height}px`,
+    left: `${leftPct}%`,
+    width: `${widthPct}%`,
+    transform: (isDragging && allowDrag && transform) 
+      ? `translate3d(${transform.x}px, ${transform.y}px, 0)` 
+      : undefined, // Gate transform to prevent animation during resize
+    opacity: (isDragging && allowDrag) ? 0.3 : 1,
+  };
+  
+  console.log(`🎨 ScheduledItem ${item.id} style:`, style);
+
+  // Calculate end time for display
+  const endMinutes = item.startMinutes + duration;
+
+  return (
+    <div
+      ref={setNodeRef}
+      {...attributes}
+      {...listenersOnState}  // StackOverflow pattern: only spread when allowDrag=true
+      className={`absolute ${item.color} text-white px-3 py-2 rounded shadow-lg ${allowDrag ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'} z-10 flex flex-col justify-between overflow-visible ${isConflicting ? 'ring-2 ring-red-500/70 bg-red-900/20' : ''}`}
+      style={style}
+      data-event-id={item.id}
+      data-allow-drag={allowDrag}
+      data-conflicting={isConflicting}
+    >
+      {/* Optional debug label showing column/overlap info */}
+      {showDebug && (
+        <div className="absolute top-0 right-0 text-[10px] bg-black/40 px-1 rounded-bl pointer-events-none">
+          col {columnIndex} / {overlapCount}
+        </div>
+      )}
+      
+      <div>
+      <div className="font-semibold text-sm">{item.label}</div>
+        <div className="text-xs opacity-90">
+          {formatTime(item.startMinutes)} - {formatTime(endMinutes)}
+        </div>
+      </div>
+      {duration > 30 && (
+        <div className="text-xs opacity-75 text-right">
+          {duration} min
+        </div>
+      )}
+
+      {/* ========================================
+          RESIZE HANDLES - Top and Bottom edges only
+          CRITICAL: Only the small nub area triggers resize, not the full width
+          This allows clicking the event body for drag without interference
+      ======================================== */}
+      {onResizeStart && !isBeingResized && (
+        <>
+          {/* Top resize handle - only the nub is interactive */}
+          <div
+            data-resize="start"
+            className="absolute left-1/2 -translate-x-1/2 top-0 w-12 h-3 cursor-ns-resize hover:bg-white hover:bg-opacity-20 transition-colors z-20 -mt-1 rounded-t"
+            onMouseDown={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              onResizeStart(item, 'start', e.clientY);
+            }}
+          >
+            {/* Visual nub */}
+            <div className="absolute left-1/2 -translate-x-1/2 top-0.5 w-8 h-1 rounded bg-white opacity-70 pointer-events-none" />
+          </div>
+
+          {/* Bottom resize handle - only the nub is interactive */}
+          <div
+            data-resize="end"
+            className="absolute left-1/2 -translate-x-1/2 bottom-0 w-12 h-3 cursor-ns-resize hover:bg-white hover:bg-opacity-20 transition-colors z-20 -mb-1 rounded-b"
+            onMouseDown={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              onResizeStart(item, 'end', e.clientY);
+            }}
+          >
+            {/* Visual nub */}
+            <div className="absolute left-1/2 -translate-x-1/2 bottom-0.5 w-8 h-1 rounded bg-white opacity-70 pointer-events-none" />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+</file>
+
+<file path="src/components/Calendar/ScheduledItemPreview.jsx">
+import { minutesToPixels, formatTime, snapToIncrement } from '../../utils/time';
+
+// ========================================
+// COMPONENT: ScheduledItemPreview (non-interactive preview during resize)
+// PHASE 2 FIX: Separate component that doesn't call useDraggable
+// ========================================
+
+export default function ScheduledItemPreview({ 
+  item, 
+  pixelsPerSlot, 
+  isConflicting = false,
+  layoutStyle = { leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 },
+  showDebug = false,
+}) {
+  const topPosition = minutesToPixels(item.startMinutes, pixelsPerSlot);
+  const duration = item.duration || 30;
+  const height = minutesToPixels(duration, pixelsPerSlot);
+  
+  // Extract layout positioning
+  const { leftPct, widthPct, columnIndex, overlapCount } = layoutStyle;
+  
+  // For display during resize, show nearest snapped times
+  // This doesn't affect the actual draft values, only the label
+  const displayStartMinutes = snapToIncrement(item.startMinutes);
+  const displayEndMinutes = snapToIncrement(item.startMinutes + duration);
+  const displayDuration = Math.max(0, displayEndMinutes - displayStartMinutes);
+
+  return (
+    <div
+      className={`absolute ${item.color} text-white px-3 py-2 rounded shadow-lg z-10 flex flex-col justify-between overflow-visible ${isConflicting ? 'ring-2 ring-red-500/70 bg-red-900/20' : ''}`}
+      style={{
+        top: `${topPosition}px`,
+        height: `${height}px`,
+        left: `${leftPct}%`,
+        width: `${widthPct}%`,
+      }}
+      data-preview="true"
+      data-conflicting={isConflicting}
+    >
+      {/* Optional debug label */}
+      {showDebug && (
+        <div className="absolute top-0 right-0 text-[10px] bg-black/40 px-1 rounded-bl pointer-events-none">
+          col {columnIndex} / {overlapCount}
+        </div>
+      )}
+      
+      <div>
+        <div className="font-semibold text-sm">{item.label}</div>
+        <div className="text-xs opacity-90">
+          {formatTime(displayStartMinutes)} - {formatTime(displayEndMinutes)}
+        </div>
+      </div>
+      {displayDuration > 30 && (
+        <div className="text-xs opacity-75 text-right">
+          {displayDuration} min
+        </div>
+      )}
+      
+      {/* Visual resize handle nubs (non-interactive, just for visual consistency) */}
+      <div className="absolute left-1/2 -translate-x-1/2 top-0 w-12 h-3 z-20 -mt-1 pointer-events-none">
+        <div className="absolute left-1/2 -translate-x-1/2 top-0.5 w-8 h-1 rounded bg-white opacity-70" />
+      </div>
+      <div className="absolute left-1/2 -translate-x-1/2 bottom-0 w-12 h-3 z-20 -mb-1 pointer-events-none">
+        <div className="absolute left-1/2 -translate-x-1/2 bottom-0.5 w-8 h-1 rounded bg-white opacity-70" />
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="src/components/DateMenu.jsx">
+// src/components/DateMenu.jsx
+import { useEffect, useRef, useState } from 'react';
+import { DayPicker } from 'react-day-picker';
+import 'react-day-picker/dist/style.css';
+import { format } from 'date-fns';
+
+export default function DateMenu({
+  date,
+  onChange,   // (Date) => void
+  onPrev,     // () => void (shift window left)
+  onNext,     // () => void (shift window right)
+  onToday,    // () => void
+  showArrows = true,
+  showToday = true,
+  variant = 'interactive', // 'interactive' | 'static'
+  className = '',
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const handle = (e) => {
+      if (!open) return;
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    const onEsc = (e) => e.key === 'Escape' && setOpen(false);
+    document.addEventListener('mousedown', handle);
+    document.addEventListener('keydown', onEsc);
+    return () => {
+      document.removeEventListener('mousedown', handle);
+      document.removeEventListener('keydown', onEsc);
+    };
+  }, [open]);
+
+  const label = format(date, 'EEE, MMM d');
+
+  // Split styles: base (visual appearance) vs interactive (hover, cursor)
+  const btnBase = "rounded-lg border px-2 py-1 transition shadow-sm font-medium bg-gray-800/60 dark:bg-gray-800/60 border-gray-600 dark:border-gray-600 text-gray-100 dark:text-gray-100";
+  const btnInteractive = "cursor-pointer hover:bg-transparent hover:border-gray-300 dark:hover:border-gray-600";
+  
+  const bigBtnBase = "flex items-center gap-2 rounded-lg border px-3 py-2 transition shadow font-semibold bg-gray-800/60 dark:bg-gray-800/60 border-gray-600 dark:border-gray-600 text-gray-100 dark:text-gray-100";
+  const bigBtnInteractive = "cursor-pointer hover:bg-transparent hover:border-gray-300 dark:hover:border-gray-600";
+  const bigBtnStatic = "cursor-default pointer-events-none";
+  
+  // Combine based on context
+  const btn = `${btnBase} ${btnInteractive}`;
+  const bigBtn = variant === 'interactive' 
+    ? `${bigBtnBase} ${bigBtnInteractive}`
+    : `${bigBtnBase} ${bigBtnStatic}`;
+
+  return (
+    <div ref={ref} className={`relative flex items-center justify-center gap-2 ${className}`}>
+      {showArrows && (
+        <button
+          aria-label="Previous window"
+          onClick={onPrev}
+          className={btn}
+        >
+          ←
+        </button>
+      )}
+
+      {/* Date trigger - interactive (with dropdown) or static (display only) */}
+      {variant === 'interactive' ? (
+        <button
+          aria-label="Open date picker"
+          onClick={() => setOpen((v) => !v)}
+          className={bigBtn}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+        >
+          <span>{label}</span>
+          <span className="text-xs opacity-70">▼</span>
+        </button>
+      ) : (
+        <span
+          className={bigBtn}
+          aria-disabled="true"
+          tabIndex={-1}
+        >
+          <span>{label}</span>
+          {/* Caret intentionally omitted in static mode */}
+        </span>
+      )}
+
+      {showArrows && (
+        <button
+          aria-label="Next window"
+          onClick={onNext}
+          className={btn}
+        >
+          →
+        </button>
+      )}
+
+      {showToday && (
+        <button
+          aria-label="Today"
+          onClick={onToday}
+          className={`${btn} text-xs`}
+        >
+          Today
+        </button>
+      )}
+
+      {/* Only show dropdown in interactive mode */}
+      {variant === 'interactive' && open && (
+        <div className="absolute z-50 top-[110%] left-1/2 -translate-x-1/2 rounded-lg border border-gray-600 dark:border-gray-600 bg-white dark:bg-gray-900 p-4 shadow-2xl">
+          <DayPicker
+            mode="single"
+            selected={date}
+            onSelect={(d) => { if (d) { onChange?.(d); setOpen(false); } }}
+            weekStartsOn={1}
+            showOutsideDays
+            fixedWeeks
+            captionLayout="dropdown-buttons"
+          />
+        </div>
+      )}
+    </div>
+  );
 }
 </file>
 
@@ -3895,6 +3941,204 @@ export default function DateNav({
     </div>
   );
 }
+</file>
+
+<file path="src/components/DateStrip.jsx">
+// src/components/DateStrip.jsx
+import { formatISO } from 'date-fns';
+import DateMenu from './DateMenu';
+
+export default function DateStrip({
+  days,                // Date[] for the visible window
+  onChangeDay,         // (index: number, newDate: Date) => void
+  onPrevWindow,        // () => void
+  onNextWindow,        // () => void
+  onToday,             // () => void
+  viewMode,            // 'day' | '3day' | 'week'
+}) {
+  const cols = viewMode === 'week' ? 'grid-cols-5' : viewMode === '3day' ? 'grid-cols-3' : 'grid-cols-1';
+  const isMultiView = days.length > 1;
+
+  return (
+    <div className={`grid ${cols} gap-3 items-center`}>
+      {days.map((d, i) => {
+        // In multi-view, only the leftmost (index 0) day gets interactive picker
+        // In single-day view, the day is always interactive
+        const isLeftmost = i === 0;
+        const variant = (isMultiView && !isLeftmost) ? 'static' : 'interactive';
+        
+        return (
+          <DateMenu
+            key={formatISO(d, { representation: 'date' }) + '-' + i}
+            date={d}
+            onChange={(newDate) => onChangeDay(i, newDate)}
+            onPrev={onPrevWindow}
+            onNext={onNextWindow}
+            onToday={onToday}
+            showArrows={isLeftmost}  // Only show arrows on first menu
+            showToday={isLeftmost}    // Only show Today on first menu
+            variant={variant}         // Interactive only for leftmost in multi-view
+          />
+        );
+      })}
+    </div>
+  );
+}
+</file>
+
+<file path="src/components/Modals/Modal.jsx">
+// ========================================
+// COMPONENT: Modal (reusable confirmation dialog)
+// ========================================
+
+export default function Modal({ 
+  isOpen, 
+  title, 
+  children, 
+  onConfirm, 
+  onCancel, 
+  confirmText = "Allow",
+  cancelText = "Cancel"
+}) {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      {/* Overlay */}
+      <div 
+        className="absolute inset-0 bg-black bg-opacity-50"
+        onClick={onCancel}
+      ></div>
+      
+      {/* Modal Content */}
+      <div className="relative bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4 z-10">
+        <h2 className="text-xl font-bold text-gray-800 mb-4">{title}</h2>
+        <div className="text-gray-600 mb-6">{children}</div>
+        
+        {/* Action Buttons */}
+        <div className="flex gap-3 justify-end">
+          {cancelText && (
+            <button
+              onClick={onCancel}
+              className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition-colors font-medium"
+            >
+              {cancelText}
+            </button>
+          )}
+          <button
+            onClick={onConfirm}
+            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors font-medium"
+          >
+            {confirmText}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="src/index.css">
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Sidebar CSS variables and smooth resize system */
+:root {
+  --sidebar-w: 320px; /* initial width */
+  --sidebar-min: 240px;
+  --sidebar-max-frac: 0.5; /* 50% of viewport */
+}
+
+/* Root app grid: sidebar + main */
+.app-grid {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  width: 100%;
+  height: 100%;
+}
+
+/* Strongly contain main area to prevent large reflows */
+.main-area {
+  contain: layout paint size;
+}
+
+/* Optional: style tweaks to keep animations cheap */
+.sidebar {
+  will-change: width;
+}
+
+/* Drag proxy: vertical bar that follows cursor during drag */
+.drag-proxy {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  /* Dark grey line */
+  background: rgba(75, 85, 99, 0.9); /* Tailwind gray-600-ish */
+  transform: translateX(0);
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* While dragging, prevent calendar panning/selection and text selection */
+.body--sidebar-dragging,
+.body--sidebar-dragging * {
+  user-select: none !important;
+  cursor: col-resize !important;
+}
+
+/* Conflict detection visuals */
+.event--conflict {
+  border-color: rgba(239, 68, 68, 0.75) !important; /* red-500-ish */
+  background: rgba(239, 68, 68, 0.10) !important;
+}
+
+/* Optional: red overlay guide inside day column when conflict present */
+.day-col--conflict::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 2px rgba(239, 68, 68, 0.35);
+  z-index: 1;
+}
+
+/* Hide scrollbar while preserving scroll functionality */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;  /* IE/Edge */
+  scrollbar-width: none;      /* Firefox */
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+</file>
+
+<file path="src/main.jsx">
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+import App from './App'
+import './index.css'
+
+// Dev-only noise filter for Chrome extension warnings
+if (import.meta.env.DEV) {
+  import("./dev/consoleNoiseFilter").then((m) => m.installDevConsoleNoiseFilter?.());
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+)
 </file>
 
 <file path="src/state/dateStore.js">
@@ -4050,6 +4294,195 @@ export function createDateState(initialDate = new Date()) {
 export const dateStore = createDateState();
 </file>
 
+<file path="package.json">
+{
+  "name": "timeblocks-experiment",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@dnd-kit/core": "^6.1.0",
+    "@dnd-kit/modifiers": "^9.0.0",
+    "date-fns": "^4.1.0",
+    "react": "^18.2.0",
+    "react-day-picker": "^9.11.1",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.43",
+    "@types/react-dom": "^18.2.17",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.16",
+    "postcss": "^8.4.32",
+    "tailwindcss": "^3.3.6",
+    "vite": "^5.0.8"
+  }
+}
+</file>
+
+<file path="src/utils/overlap.js">
+// ========================================
+// OVERLAP DETECTION UTILITY
+// ========================================
+
+// Check if a new event overlaps with any existing events
+export function checkOverlap(newEvent, existingEvents) {
+  const newStart = newEvent.startMinutes;
+  const newEnd = newEvent.startMinutes + (newEvent.duration || 30);
+  
+  const overlappingEvents = existingEvents.filter(existing => {
+    const existingStart = existing.startMinutes;
+    const existingEnd = existing.startMinutes + (existing.duration || 30);
+    
+    // Overlap condition: new.start < existing.end AND new.end > existing.start
+    return newStart < existingEnd && newEnd > existingStart;
+  });
+  
+  return overlappingEvents;
+}
+
+// ========================================
+// GOOGLE CALENDAR-STYLE HORIZONTAL LAYOUT
+// ========================================
+
+/**
+ * Compute horizontal layout for overlapping events (Google Calendar style)
+ * 
+ * Algorithm:
+ * - Events that overlap in time share horizontal space
+ * - Earlier starting events are placed left
+ * - If same start time, shorter events go left
+ * - Each event gets equal share: width = 100% / overlapCount
+ * 
+ * @param {Array} events - Array of events with {id, startMinutes, duration}
+ * @returns {Object} Layout map: { [id]: { columnIndex, overlapCount, leftPct, widthPct } }
+ */
+export function computeEventLayout(events) {
+  console.log('🎨 computeEventLayout CALLED:', {
+    eventCount: events?.length || 0,
+    events: events?.map(e => ({ 
+      id: e.id, 
+      label: e.label || e.name,
+      start: e.startMinutes, 
+      dur: e.duration 
+    })) || [],
+  });
+  
+  if (!events || events.length === 0) {
+    console.log('  → No events, returning empty layout');
+    return {};
+  }
+
+  // Normalize events to have explicit endMinutes
+  const norm = events.map(e => ({
+    ...e,
+    endMinutes: e.startMinutes + (e.duration || 30),
+  }));
+  
+  console.log('📐 Normalized events:', norm.map(e => ({
+    id: e.id,
+    label: e.label || e.name,
+    start: e.startMinutes,
+    end: e.endMinutes,
+  })));
+
+  // Create time points for sweep-line algorithm
+  const points = [];
+  for (const e of norm) {
+    points.push({ t: e.startMinutes, type: +1, id: e.id, dur: e.duration || 30 });
+    points.push({ t: e.endMinutes, type: -1, id: e.id, dur: e.duration || 30 });
+  }
+
+  // Sort by:
+  // 1. Time (ascending)
+  // 2. Type (ends before starts to avoid false overlap at boundaries)
+  // 3. Duration (shorter first for same start time)
+  points.sort((a, b) => {
+    // Primary: sort by time
+    if (a.t !== b.t) return a.t - b.t;
+
+    // Secondary: process ends (-1) before starts (+1) at same time
+    // This prevents A.end === B.start from being counted as overlap
+    if (a.type !== b.type) return a.type - b.type; // -1 < +1
+
+    // Tertiary: if both are starts at same time, shorter duration first (leftmost)
+    if (a.type === +1) {
+      return (a.dur || 0) - (b.dur || 0);
+    }
+
+    // If both are ends at same time, order doesn't matter
+    return 0;
+  });
+
+  const active = new Set();       // Currently active event IDs
+  const columns = [];             // Column slots (null = free, id = occupied)
+  const colOf = new Map();        // Event ID → column index
+  const stats = new Map();        // Event ID → { maxConcurrent }
+
+  // Update max concurrent count for all active events
+  const touchStats = () => {
+    const k = active.size;
+    active.forEach(id => {
+      const s = stats.get(id) || { maxConcurrent: 1 };
+      if (k > s.maxConcurrent) s.maxConcurrent = k;
+      stats.set(id, s);
+    });
+  };
+
+  // Sweep through time points
+  for (const p of points) {
+    if (p.type === +1) {
+      // Event starting - find leftmost free column
+      let idx = columns.findIndex(v => v == null);
+      if (idx === -1) { 
+        idx = columns.length; 
+        columns.push(null); 
+      }
+      columns[idx] = p.id;
+      colOf.set(p.id, idx);
+      active.add(p.id);
+      touchStats();
+    } else {
+      // Event ending - free its column
+      const idx = colOf.get(p.id);
+      if (idx != null) columns[idx] = null;
+      active.delete(p.id);
+      touchStats();
+    }
+  }
+
+  // Build final layout object
+  const out = {};
+  for (const e of norm) {
+    const maxC = (stats.get(e.id)?.maxConcurrent) ?? 1;
+    const col = colOf.get(e.id) ?? 0;
+    const widthPct = 100 / maxC;
+    const leftPct = col * widthPct;
+    out[e.id] = { 
+      columnIndex: col, 
+      overlapCount: maxC, 
+      leftPct, 
+      widthPct 
+    };
+    
+    console.log(`  → Event ${e.id} (${e.label || e.name}):`, {
+      column: col,
+      maxConcurrent: maxC,
+      left: `${leftPct}%`,
+      width: `${widthPct}%`,
+    });
+  }
+  
+  console.log('✅ Layout computed:', out);
+  
+  return out;
+}
+</file>
+
 <file path="src/App.jsx">
 /**
  * TIME-BLOCKING CALENDAR APP
@@ -4088,8 +4521,8 @@ import { layoutStore } from './state/layoutStore';
 import { MOVE_POLICY, CONFLICT_BEHAVIOR } from './config/policies';
 import DateStrip from './components/DateStrip';
 import MultiDayCalendar from './components/MultiDayCalendar';
-import SplitPane from './components/SplitPane';
 import HamburgerButton from './components/HamburgerButton';
+import { computeEventLayout } from './utils/overlap';
 
 // ========================================
 // PHASE 1 DIAGNOSTICS - Duplicate Draggable Detection
@@ -4217,6 +4650,164 @@ function checkOverlap(newEvent, existingEvents) {
   });
   
   return overlappingEvents;
+}
+
+// ========================================
+// ROBUST CONFLICT DETECTION (bitset-based, per-day slot occupancy)
+// ========================================
+
+// Debug flag - set to true to see conflict detection logs
+const DEBUG_CONFLICTS = true;
+
+const SLOT_MIN = 15; // minutes per slot
+const DAY_SLOTS = Math.floor((24 * 60) / SLOT_MIN); // 96 slots per day
+
+// Convert minute to slot index (0..95)
+function minToSlot(min) {
+  const s = Math.floor(min / SLOT_MIN);
+  return Math.max(0, Math.min(DAY_SLOTS - 1, s));
+}
+
+// Canonicalize event interval to slot range [sStart, sEnd) - half-open
+// Enforce at least 1 slot and valid bounds
+function toSlotRange(ev) {
+  // Extract start and end from event (support both formats)
+  const startMin = ev.startMinutes || ev.start || 0;
+  const endMin = ev.endMinutes || ev.end || (startMin + (ev.duration || SLOT_MIN));
+  
+  const a = Math.max(0, Math.min(startMin, endMin));
+  const b = Math.max(a + SLOT_MIN, Math.max(startMin, endMin));
+  const sStart = minToSlot(a);
+  const sEnd = minToSlot(b);
+  return [sStart, Math.max(sStart + 1, Math.min(sEnd, DAY_SLOTS))];
+}
+
+// Bitset: Uint32Array of length 3 (3*32 = 96 bits)
+function makeEmptyBits() {
+  return new Uint32Array(3);
+}
+
+// Set bits [sStart, sEnd) in the bitset
+function setRange(bits, sStart, sEnd) {
+  for (let s = sStart; s < sEnd; s++) {
+    const i = (s / 32) | 0;
+    const o = s % 32;
+    bits[i] |= (1 << o) >>> 0;
+  }
+}
+
+// Test overlap of [sStart, sEnd) against bits
+function hasOverlap(bits, sStart, sEnd) {
+  for (let s = sStart; s < sEnd; s++) {
+    const i = (s / 32) | 0;
+    const o = s % 32;
+    if (bits[i] & ((1 << o) >>> 0)) return true;
+  }
+  return false;
+}
+
+// Build day->bits occupancy map from events (excluding specified id)
+function buildDayOccupancy(events, excludeId = null) {
+  const map = new Map(); // dayKey -> Uint32Array(3)
+  
+  if (DEBUG_CONFLICTS) {
+    console.log('🔧 buildDayOccupancy:', {
+      totalEvents: events.length,
+      excludeId,
+      eventsWithDateKey: events.filter(e => e.dateKey).length,
+    });
+  }
+  
+  for (const ev of events) {
+    if (!ev.dateKey) {
+      if (DEBUG_CONFLICTS) console.warn('⚠️ Event without dateKey:', ev);
+      continue;
+    }
+    if (excludeId && ev.id === excludeId) {
+      if (DEBUG_CONFLICTS) console.log('  → Excluding:', ev.id);
+      continue;
+    }
+    
+    const [s, e] = toSlotRange(ev);
+    let bits = map.get(ev.dateKey);
+    if (!bits) {
+      bits = makeEmptyBits();
+      map.set(ev.dateKey, bits);
+    }
+    setRange(bits, s, e);
+    
+    if (DEBUG_CONFLICTS) {
+      console.log(`  → Occupying ${ev.dateKey} slots ${s}-${e} (${ev.id}:`, ev.label || ev.name, ')');
+    }
+  }
+  
+  if (DEBUG_CONFLICTS) {
+    console.log('✅ Occupancy map built:', {
+      days: Array.from(map.keys()),
+      totalDays: map.size,
+    });
+  }
+  
+  return map;
+}
+
+// Check if candidate conflicts with occupancy map
+function isConflicting(candidate, occupancy) {
+  if (!candidate || !candidate.dateKey) {
+    if (DEBUG_CONFLICTS) console.warn('⚠️ isConflicting: Invalid candidate', candidate);
+    return false;
+  }
+  
+  const [s, e] = toSlotRange(candidate);
+  const bits = occupancy.get(candidate.dateKey);
+  
+  if (!bits) {
+    if (DEBUG_CONFLICTS) {
+      console.log('ℹ️ isConflicting: No occupancy for day', candidate.dateKey);
+    }
+    return false; // Empty day -> no conflicts
+  }
+  
+  const conflict = hasOverlap(bits, s, e);
+  
+  if (DEBUG_CONFLICTS) {
+    console.log('🔍 isConflicting:', {
+      candidate: {
+        id: candidate.id,
+        dateKey: candidate.dateKey,
+        startMinutes: candidate.startMinutes || candidate.start,
+        endMinutes: candidate.endMinutes || candidate.end,
+        slots: `${s}-${e}`,
+      },
+      hasConflict: conflict,
+      dayHasEvents: !!bits,
+    });
+  }
+  
+  return conflict;
+}
+
+// Find IDs of events that conflict with candidate (for modal)
+function listConflictingEventIds(candidate, events, excludeId = null) {
+  if (!candidate || !candidate.dateKey) return [];
+  
+  const [sC, eC] = toSlotRange(candidate);
+  const sameDay = events.filter(
+    (ev) => ev.dateKey === candidate.dateKey && (!excludeId || ev.id !== excludeId)
+  );
+  
+  const ids = [];
+  for (const ev of sameDay) {
+    const [s, e] = toSlotRange(ev);
+    if (sC < e && s < eC) ids.push(ev.id);
+  }
+  return ids;
+}
+
+// Helper: Get actual event objects that conflict
+function listConflicts(allEvents, candidate, excludeId = null) {
+  const ids = listConflictingEventIds(candidate, allEvents, excludeId);
+  return allEvents.filter(ev => ids.includes(ev.id));
 }
 
 // Format minutes to time string (e.g., "9:30 AM")
@@ -4745,21 +5336,35 @@ import { useDraggable, useDroppable } from '@dnd-kit/core';
 // PHASE 2 FIX: Separate component that doesn't call useDraggable
 // ========================================
 
-function ScheduledItemPreview({ item, pixelsPerSlot }) {
+function ScheduledItemPreview({ 
+  item, 
+  pixelsPerSlot,
+  layoutStyle = { leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 },
+  showDebug = false,
+}) {
   const topPosition = minutesToPixels(item.startMinutes, pixelsPerSlot);
   const duration = item.duration || 30;
   const height = minutesToPixels(duration, pixelsPerSlot);
   const endMinutes = item.startMinutes + duration;
+  
+  const { leftPct, widthPct, columnIndex, overlapCount } = layoutStyle;
 
   return (
     <div
-      className={`absolute left-20 right-2 ${item.color} text-white px-3 py-2 rounded shadow-lg z-10 flex flex-col justify-between overflow-visible`}
+      className={`absolute ${item.color} text-white px-3 py-2 rounded shadow-lg z-10 flex flex-col justify-between overflow-visible`}
       style={{
         top: `${topPosition}px`,
         height: `${height}px`,
+        left: `${leftPct}%`,
+        width: `${widthPct}%`,
       }}
       data-preview="true"
     >
+      {showDebug && (
+        <div className="absolute top-0 right-0 text-[10px] bg-black/40 px-1 rounded-bl pointer-events-none">
+          col {columnIndex} / {overlapCount}
+        </div>
+      )}
       <div>
         <div className="font-semibold text-sm">{item.label}</div>
         <div className="text-xs opacity-90">
@@ -4787,7 +5392,15 @@ function ScheduledItemPreview({ item, pixelsPerSlot }) {
 // COMPONENT: ScheduledItem (task placed in calendar)
 // ========================================
 
-function ScheduledItem({ item, pixelsPerSlot, onResizeStart, isBeingResized = false, isResizing = false }) {
+function ScheduledItem({ 
+  item, 
+  pixelsPerSlot, 
+  onResizeStart, 
+  isBeingResized = false, 
+  isResizing = false,
+  layoutStyle = { leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 },
+  showDebug = false,
+}) {
   // PHASE 1 DIAGNOSTIC: Track this render
   trackScheduledItemRender(item.id);
 
@@ -4837,11 +5450,16 @@ function ScheduledItem({ item, pixelsPerSlot, onResizeStart, isBeingResized = fa
   const duration = item.duration || 30; // Default to 30 minutes if not specified
   const height = minutesToPixels(duration, pixelsPerSlot);
   
+  // Extract layout positioning
+  const { leftPct, widthPct, columnIndex, overlapCount } = layoutStyle;
+  
   // Apply transform for dragging
   // CRITICAL: Only apply transform when actually dragging AND drag is allowed
   const style = {
     top: `${topPosition}px`,
     height: `${height}px`,
+    left: `${leftPct}%`,
+    width: `${widthPct}%`,
     transform: (isDragging && allowDrag && transform) 
       ? `translate3d(${transform.x}px, ${transform.y}px, 0)` 
       : undefined, // Gate transform to prevent animation during resize
@@ -4856,11 +5474,16 @@ function ScheduledItem({ item, pixelsPerSlot, onResizeStart, isBeingResized = fa
       ref={setNodeRef}
       {...attributes}
       {...listenersOnState}  // StackOverflow pattern: only spread when allowDrag=true
-      className={`absolute left-20 right-2 ${item.color} text-white px-3 py-2 rounded shadow-lg ${allowDrag ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'} z-10 flex flex-col justify-between overflow-visible`}
+      className={`absolute ${item.color} text-white px-3 py-2 rounded shadow-lg ${allowDrag ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'} z-10 flex flex-col justify-between overflow-visible`}
       style={style}
       data-event-id={item.id}
       data-allow-drag={allowDrag}
     >
+      {showDebug && (
+        <div className="absolute top-0 right-0 text-[10px] bg-black/40 px-1 rounded-bl pointer-events-none">
+          col {columnIndex} / {overlapCount}
+        </div>
+      )}
       <div>
       <div className="font-semibold text-sm">{item.label}</div>
         <div className="text-xs opacity-90">
@@ -4917,7 +5540,12 @@ function ScheduledItem({ item, pixelsPerSlot, onResizeStart, isBeingResized = fa
 // COMPONENT: GhostEvent (preview of where event will be placed)
 // ========================================
 
-function GhostEvent({ ghostPosition, pixelsPerSlot }) {
+function GhostEvent({ 
+  ghostPosition, 
+  pixelsPerSlot,
+  layoutStyle = { leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 },
+  showDebug = false,
+}) {
   if (!ghostPosition) return null;
 
   const { startMinutes, task } = ghostPosition;
@@ -4929,15 +5557,24 @@ function GhostEvent({ ghostPosition, pixelsPerSlot }) {
   
   // Calculate end time for preview
   const endMinutes = startMinutes + duration;
+  
+  const { leftPct, widthPct, columnIndex, overlapCount } = layoutStyle;
 
   return (
     <div
-      className="absolute left-20 right-2 border-2 border-gray-400 border-dashed rounded bg-gray-50 bg-opacity-30 z-20 pointer-events-none px-3 py-2 flex flex-col justify-between"
+      className="absolute border-2 border-gray-400 border-dashed rounded bg-gray-50 bg-opacity-30 z-20 pointer-events-none px-3 py-2 flex flex-col justify-between"
       style={{ 
         top: `${topPosition}px`,
         height: `${height}px`,
+        left: `${leftPct}%`,
+        width: `${widthPct}%`,
       }}
     >
+      {showDebug && (
+        <div className="absolute top-0 right-0 text-[10px] bg-black/40 px-1 rounded-bl">
+          col {columnIndex} / {overlapCount}
+        </div>
+      )}
       <div className="text-gray-700 text-sm font-medium">
         {task.label}
       </div>
@@ -4989,6 +5626,18 @@ function CalendarGrid({
   
   // Only show resize draft if it's for this day
   const showResizeDraft = resizeDraft && (!idNamespace || resizeDraft.dateKey === dayKey);
+  
+  // ========================================
+  // HORIZONTAL LAYOUT FOR OVERLAPPING EVENTS (Google Calendar style)
+  // ========================================
+  const layout = React.useMemo(() => {
+    console.log('📊 CalendarGrid computing layout for', scheduledItems.length, 'items');
+    const result = computeEventLayout(scheduledItems);
+    console.log('📊 Layout result:', result);
+    return result;
+  }, [scheduledItems]);
+  
+  const showDebugLabels = true; // Show debug labels to verify layout
 
   // Make the entire calendar a droppable zone
   // Use namespaced ID if provided (multi-day), otherwise 'calendar' (single-day backward compat)
@@ -5126,16 +5775,21 @@ function CalendarGrid({
           const isBeingResized = resizeDraft?.id === item.id;
           return !isBeingResized; // Don't render the real draggable when resizing
         })
-        .map((item) => (
-          <ScheduledItem 
-            key={dayKey ? `${item.id}@${dayKey}` : item.id}
-            item={item} 
-            pixelsPerSlot={pixelsPerSlot}
-            onResizeStart={onResizeStart}
-            isBeingResized={false} // Never true here since we filtered it out
-            isResizing={isResizing}
-          />
-        ))
+        .map((item) => {
+          const itemLayout = layout[item.id] || { leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 };
+          return (
+            <ScheduledItem 
+              key={dayKey ? `${item.id}@${dayKey}` : item.id}
+              item={item} 
+              pixelsPerSlot={pixelsPerSlot}
+              onResizeStart={onResizeStart}
+              isBeingResized={false} // Never true here since we filtered it out
+              isResizing={isResizing}
+              layoutStyle={itemLayout}
+              showDebug={showDebugLabels}
+            />
+          );
+        })
       }
 
       {/* Live resize draft - shows preview while resizing */}
@@ -5147,13 +5801,22 @@ function CalendarGrid({
             key={`preview-${resizeDraft.id}@${dayKey || 'default'}`}
             item={resizeDraft}
             pixelsPerSlot={pixelsPerSlot}
+            layoutStyle={layout[resizeDraft.id] || { leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 }}
+            showDebug={showDebugLabels}
           />
         </div>
       )}
 
       {/* Ghost/shadow preview - shows where dragged item will land */}
       {/* Only render ghost in the grid that's currently hovered */}
-      {isHoveringThisGrid && <GhostEvent ghostPosition={ghostPosition} pixelsPerSlot={pixelsPerSlot} />}
+      {isHoveringThisGrid && (
+        <GhostEvent 
+          ghostPosition={ghostPosition} 
+          pixelsPerSlot={pixelsPerSlot}
+          layoutStyle={{ leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 }}
+          showDebug={showDebugLabels}
+        />
+      )}
     </div>
   );
 }
@@ -5228,10 +5891,282 @@ function DndMonitorBridge() {
 }
 
 // ========================================
+// SMOOTH SIDEBAR RESIZE (drag proxy + snap-on-commit)
+// ========================================
+
+// Utility: clamp helper
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+// Utility: compute allowed max based on viewport
+const computeMaxWidth = () => Math.floor(window.innerWidth * parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-max-frac') || '0.5'));
+
+// Utility: choose a snap candidate (coarse during drag)
+function getSnapCandidate(px, snapPoints, hysteresis = 12) {
+  // prefer the closest snap point if within hysteresis; else return raw px
+  let best = { d: Infinity, s: px };
+  for (const s of snapPoints) {
+    const d = Math.abs(px - s);
+    if (d < best.d) best = { d, s };
+  }
+  return best.d <= hysteresis ? best.s : px;
+}
+
+// A thin vertical handle at the right edge of the sidebar
+function SidebarResizeHandle({ onPointerDown }) {
+  return (
+    <div
+      aria-label="Resize sidebar"
+      onPointerDown={onPointerDown}
+      className="absolute top-0 right-0 h-full w-2 cursor-col-resize select-none z-40"
+      style={{ touchAction: "none" }}
+    >
+      {/* Centered grab icon overlay */}
+      <div
+        className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none"
+        aria-hidden="true"
+      >
+        {/* Simple SVG grip (two dots) – lightweight and neutral */}
+        <svg width="10" height="20" viewBox="0 0 10 20" fill="none">
+          <circle cx="5" cy="6" r="1.5" fill="rgba(75,85,99,0.9)" />
+          <circle cx="5" cy="14" r="1.5" fill="rgba(75,85,99,0.9)" />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+// The on-screen proxy line that follows the cursor during drag
+function DragProxy({ x, visible }) {
+  if (!visible) return null;
+  return (
+    <div
+      className="drag-proxy"
+      style={{ left: x }}
+    />
+  );
+}
+
+// Compact sticky header for left pane with controls
+function LeftPaneHeader({
+  onOpenCreateEvent,
+  onOpenTypes,
+}) {
+  return (
+    <div className="sticky top-0 z-10 bg-gray-50/95 backdrop-blur border-b border-gray-200 px-4 py-3 flex items-center justify-between">
+      <div className="text-sm font-semibold text-gray-700">
+        Event Templates
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onOpenTypes}
+          className="inline-flex items-center rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-400/50 shadow-sm"
+          aria-label="Manage Types"
+          title="Manage Types"
+        >
+          {/* simple icon: tags */}
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M20 10L12 2H4v8l8 8 8-8z" stroke="currentColor" strokeWidth="1.5" />
+            <circle cx="7" cy="7" r="1.5" fill="currentColor" />
+          </svg>
+          <span className="ml-1.5">Types</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={onOpenCreateEvent}
+          className="inline-flex items-center rounded-md bg-blue-600 text-white px-2.5 py-1.5 text-xs font-semibold hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-400/50 shadow-sm"
+          aria-label="Add Event"
+          title="Add Event"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+          </svg>
+          <span className="ml-1.5">Add</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ========================================
+// CENTRALIZED CONFLICT GATE (single source of truth for all commits)
+// ========================================
+
+// Unified conflict gate used by resize/move/place
+function assertNoConflictOrStageConfirm({
+  candidate,         // {id?, dayKey, start, end} or {id?, dateKey, startMinutes, endMinutes/duration}
+  events,            // current scheduled events
+  setPendingAction,  // state setter to stage modal payload
+  openConflictModal, // () => void
+  onCommitSafe,      // (candidate) => void - called only when no conflict
+  isCommittingRef,   // React.useRef to prevent double-commits
+}) {
+  console.log('🚪 CONFLICT GATE CALLED:', {
+    candidate,
+    totalEvents: events.length,
+    isCommittingRefLocked: isCommittingRef?.current,
+  });
+  
+  // Normalize candidate to bitset format
+  const normalized = {
+    id: candidate.id,
+    dateKey: candidate.dateKey || candidate.dayKey,
+    start: candidate.startMinutes || candidate.start,
+    end: candidate.endMinutes || candidate.end || (candidate.startMinutes + candidate.duration) || (candidate.start + 30),
+  };
+  
+  console.log('📋 Normalized candidate:', normalized);
+  
+  // Exclude the event itself (if moving/resizing an existing one)
+  const excludeId = normalized.id ?? null;
+  const occ = buildDayOccupancy(events, excludeId);
+
+  if (isConflicting(normalized, occ)) {
+    const neighbors = listConflicts(events, normalized, excludeId);
+    console.log('❌ CONFLICT DETECTED! Neighbors:', neighbors);
+    setPendingAction({ kind: "conflict", candidate, neighbors });
+    openConflictModal();
+    return false;
+  }
+
+  // Safe path - no conflicts
+  console.log('✅ NO CONFLICT - Committing safely');
+  onCommitSafe(candidate);
+  if (isCommittingRef) {
+    isCommittingRef.current = false;
+  }
+  return true;
+}
+
+// Lightweight resizer controller (rAF + CSS var + commit-on-release)
+function useSidebarResizeController(initialWidth = 320) {
+  const isDraggingRef = React.useRef(false);
+  const startXRef = React.useRef(0);
+  const startWidthRef = React.useRef(initialWidth);
+  const liveRawRef = React.useRef(initialWidth); // raw pixel width under cursor
+  const rafRef = React.useRef(0);
+
+  const [proxy, setProxy] = React.useState({ visible: false, x: 0 });
+
+  // Snap points (coarse preview during drag); tweak as desired
+  const snapPoints = useMemo(() => [240, 280, 320, 360, 400, 460, 520], []);
+
+  // Load from localStorage once
+  React.useEffect(() => {
+    try {
+      const saved = parseInt(localStorage.getItem("sidebarWidth") || "", 10);
+      if (!Number.isNaN(saved)) {
+        startWidthRef.current = saved;
+        liveRawRef.current = saved;
+        document.documentElement.style.setProperty("--sidebar-w", `${saved}px`);
+      } else {
+        document.documentElement.style.setProperty("--sidebar-w", `${initialWidth}px`);
+      }
+    } catch {
+      document.documentElement.style.setProperty("--sidebar-w", `${initialWidth}px`);
+    }
+  }, [initialWidth]);
+
+  // Pointer handlers
+  const onPointerDown = React.useCallback((e) => {
+    e.preventDefault();
+    isDraggingRef.current = true;
+    startXRef.current = e.clientX;
+    const style = getComputedStyle(document.documentElement);
+    const current = parseInt(style.getPropertyValue("--sidebar-w"), 10) || startWidthRef.current;
+    startWidthRef.current = current;
+    liveRawRef.current = current;
+
+    document.body.classList.add("body--sidebar-dragging");
+
+    const onPointerMove = (ev) => {
+      if (!isDraggingRef.current) return;
+
+      const min = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-min"), 10) || 240;
+      const max = computeMaxWidth();
+      const dx = ev.clientX - startXRef.current;
+      const raw = clamp(startWidthRef.current + dx, min, max);
+      liveRawRef.current = raw;
+
+      // Coarse snap PREVIEW (proxy snaps visually)
+      const snapped = getSnapCandidate(raw, snapPoints, 12);
+
+      // Update proxy once per frame
+      if (!rafRef.current) {
+        rafRef.current = requestAnimationFrame(() => {
+          setProxy({ visible: true, x: `${snapped}px` });
+          rafRef.current = 0;
+        });
+      }
+    };
+
+    const onPointerUp = () => {
+      if (!isDraggingRef.current) return;
+      isDraggingRef.current = false;
+
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      document.body.classList.remove("body--sidebar-dragging");
+
+      // Final commit with snapping
+      const min = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-min"), 10) || 240;
+      const max = computeMaxWidth();
+      const raw = clamp(liveRawRef.current, min, max);
+      const snapped = getSnapCandidate(raw, snapPoints, 12);
+
+      // Single style write commit
+      document.documentElement.style.setProperty("--sidebar-w", `${snapped}px`);
+
+      // Persist once
+      try {
+        localStorage.setItem("sidebarWidth", String(snapped));
+      } catch {}
+
+      // Hide proxy
+      setProxy((p) => ({ ...p, visible: false }));
+    };
+
+    window.addEventListener("pointermove", onPointerMove, { passive: true });
+    window.addEventListener("pointerup", onPointerUp, { passive: true });
+
+    // show proxy at current edge
+    setProxy({ visible: true, x: `${current}px` });
+  }, [snapPoints]);
+
+  React.useEffect(() => {
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      document.body.classList.remove("body--sidebar-dragging");
+    };
+  }, []);
+
+  return { onPointerDown, proxyState: proxy };
+}
+
+// ========================================
 // MAIN APP COMPONENT
 // ========================================
 
 function App() {
+  // ========================================
+  // POLICY DEBUG (show on mount)
+  // ========================================
+  React.useEffect(() => {
+    console.log('🔧 POLICIES LOADED:', {
+      MOVE_POLICY,
+      CONFLICT_BEHAVIOR,
+      willShowModalOnConflict: MOVE_POLICY === 'confirm-then-commit',
+      willCommitImmediately: MOVE_POLICY === 'always',
+    });
+  }, []);
+  
+  // ========================================
+  // SIDEBAR RESIZE CONTROLLER
+  // ========================================
+  
+  const { onPointerDown, proxyState } = useSidebarResizeController(320);
+  
   // ========================================
   // DATE STORE
   // ========================================
@@ -5303,6 +6238,20 @@ function App() {
   const [showOverlapModal, setShowOverlapModal] = useState(false);
   const [pendingEvent, setPendingEvent] = useState(null);
   const [overlappingEvents, setOverlappingEvents] = useState([]);
+  const [pendingAction, setPendingAction] = useState(null); // For centralized conflict gate
+  
+  // Ref: Prevent double-commits while modal is open
+  const isCommittingRef = React.useRef(false);
+  
+  // Debug: Watch for unexpected state changes
+  React.useEffect(() => {
+    if (scheduledItems.length > 0) {
+      console.log('📋 scheduledItems CHANGED:', {
+        count: scheduledItems.length,
+        items: scheduledItems.map(e => ({ id: e.id, label: e.label, dateKey: e.dateKey })),
+      });
+    }
+  }, [scheduledItems]);
   
   // State: Event editor modal
   const [showEventEditor, setShowEventEditor] = useState(false);
@@ -5321,6 +6270,98 @@ function App() {
   React.useEffect(() => {
     setResizingState(isResizing);
   }, [isResizing]);
+
+  // ========================================
+  // CONFLICT DETECTION (bitset-based, draft-aware)
+  // ========================================
+  
+  // Track which event is being moved/resized (exclude from occupancy to avoid self-conflict)
+  const movingId = useMemo(() => {
+    if (resizeDraft && resizeDraft.id) return resizeDraft.id;
+    if (activeId && activeId.startsWith('scheduled-')) return activeId;
+    return null;
+  }, [resizeDraft, activeId]);
+  
+  // Build draft candidate from current ghost position or resize draft
+  const draftCandidate = useMemo(() => {
+    // Priority 1: Resize draft (active resize operation)
+    if (resizeDraft && resizeDraft.dateKey) {
+      const draft = {
+        id: resizeDraft.id,
+        dateKey: resizeDraft.dateKey,
+        startMinutes: resizeDraft.startMinutes,
+        endMinutes: resizeDraft.startMinutes + (resizeDraft.duration || MINUTES_PER_SLOT),
+        duration: resizeDraft.duration || MINUTES_PER_SLOT,
+      };
+      if (DEBUG_CONFLICTS) console.log('📝 Draft from RESIZE:', draft);
+      return draft;
+    }
+    
+    // Priority 2: Ghost position (dragging new or existing event)
+    if (ghostPosition && ghostPosition.startMinutes != null) {
+      const duration = ghostPosition.task?.duration || ghostPosition.duration || MINUTES_PER_SLOT;
+      const targetDayKey = ghostPosition.dayKey || dateKey;
+      const draft = {
+        id: movingId || `ghost-${Date.now()}`,
+        dateKey: targetDayKey,
+        startMinutes: ghostPosition.startMinutes,
+        endMinutes: ghostPosition.startMinutes + duration,
+        duration: duration,
+      };
+      if (DEBUG_CONFLICTS) console.log('📝 Draft from GHOST:', draft);
+      return draft;
+    }
+    
+    if (DEBUG_CONFLICTS && (resizeDraft || ghostPosition)) {
+      console.log('⚠️ Draft conditions not met:', { resizeDraft, ghostPosition });
+    }
+    
+    return null;
+  }, [resizeDraft, ghostPosition, movingId, dateKey]);
+  
+  // Build occupancy map (exclude moving event to avoid self-conflict)
+  const occupancy = useMemo(
+    () => buildDayOccupancy(scheduledItems, movingId || null),
+    [scheduledItems, movingId]
+  );
+  
+  // Check if draft has live conflict
+  const liveConflict = useMemo(() => {
+    if (!draftCandidate) {
+      if (DEBUG_CONFLICTS && (resizeDraft || ghostPosition)) {
+        console.log('⚠️ liveConflict: No draftCandidate despite resize/ghost state');
+      }
+      return false;
+    }
+    
+    const conflict = isConflicting(draftCandidate, occupancy);
+    
+    if (DEBUG_CONFLICTS) {
+      console.log('🎯 Live Conflict Check:', {
+        draftCandidate,
+        hasConflict: conflict,
+        occupancyDays: Array.from(occupancy.keys()),
+      });
+    }
+    
+    return conflict;
+  }, [draftCandidate, occupancy, resizeDraft, ghostPosition]);
+  
+  // Conflict UI state for passing to calendar
+  const conflictUi = useMemo(() => {
+    const ui = {
+      dayKey: draftCandidate?.dateKey || null,
+      liveConflict,
+      draftCandidate,
+      movingId,
+    };
+    
+    if (DEBUG_CONFLICTS && liveConflict) {
+      console.log('🔴 CONFLICT UI STATE:', ui);
+    }
+    
+    return ui;
+  }, [draftCandidate, liveConflict, movingId]);
 
   // MOVED TO DndEventMonitor COMPONENT (must be child of DndContext)
 
@@ -5443,12 +6484,20 @@ function App() {
   
   // User confirms - add/update the pending event despite overlap
   const handleConfirmOverlap = React.useCallback(() => {
+    console.log('✅ CONFIRM OVERLAP CLICKED:', {
+      pendingEvent,
+      isCommittingRefLocked: isCommittingRef.current,
+    });
+    
     if (pendingEvent) {
       // Check if this is a new event or a repositioned existing event
       const isExistingEvent = scheduledItems.some(e => e.id === pendingEvent.id);
       
+      console.log('  → Is existing event?', isExistingEvent);
+      
       if (isExistingEvent) {
         // Repositioning existing event
+        console.log('  → Updating existing event position');
         setScheduledItems((prev) =>
           prev.map((schedItem) =>
             schedItem.id === pendingEvent.id
@@ -5458,34 +6507,56 @@ function App() {
         );
       } else {
         // Adding new event
-        setScheduledItems((prev) => [...prev, pendingEvent]);
+        console.log('  → Adding new event');
+        setScheduledItems((prev) => {
+          const updated = [...prev, pendingEvent];
+          console.log('  → scheduledItems updated to:', updated);
+          return updated;
+        });
         setNextId((prev) => prev + 1);
       }
     }
     
     // Close modal and clear pending state
+    console.log('  → Closing modal and clearing state');
     setShowOverlapModal(false);
     setPendingEvent(null);
     setOverlappingEvents([]);
+    setPendingAction(null);
     
     // CRITICAL: Also clear resize state if this was from a resize operation
     setIsResizing(false);
     setResizeTarget(null);
     setResizeDraft(null);
-  }, [pendingEvent, scheduledItems, isResizing, resizeTarget, resizeDraft]);
+    
+    // Release commit lock
+    console.log('  → Releasing commit lock');
+    isCommittingRef.current = false;
+  }, [pendingEvent, scheduledItems]);
   
   // User cancels - discard the pending event
   const handleCancelOverlap = React.useCallback(() => {
+    console.log('❌ CANCEL OVERLAP CLICKED:', {
+      pendingEvent,
+      isCommittingRefLocked: isCommittingRef.current,
+    });
+    
     // Close modal and clear pending state
+    console.log('  → Closing modal without saving');
     setShowOverlapModal(false);
     setPendingEvent(null);
     setOverlappingEvents([]);
+    setPendingAction(null);
     
     // CRITICAL: Also clear resize state if this was from a resize operation
     setIsResizing(false);
     setResizeTarget(null);
     setResizeDraft(null);
-  }, [pendingEvent, isResizing, resizeTarget, resizeDraft]);
+    
+    // Release commit lock
+    console.log('  → Releasing commit lock');
+    isCommittingRef.current = false;
+  }, [pendingEvent]);
 
   // ========================================
   // RESIZE HANDLERS
@@ -5745,10 +6816,24 @@ function App() {
   }
 
   function handleDragEnd(event) {
+    window._dragMoveCount = 0; // Reset counter
+    
+    console.log('');
+    console.log('═══════════════════════════════════════');
+    console.log('🎬 handleDragEnd CALLED');
+    console.log('═══════════════════════════════════════');
+    console.log('  Active ID:', event.active.id);
+    console.log('  Over ID:', event.over?.id);
+    console.log('  Active Data:', event.active.data.current);
+    console.log('  Delta:', event.delta);
+    console.log('═══════════════════════════════════════');
+    console.log('');
+    
     // ========================================
     // IGNORE DRAG END IF CURRENTLY RESIZING
     // ========================================
     if (isResizing) {
+      console.log('⏸️ Ignoring drag end (currently resizing)');
       setActiveId(null);
       return;
     }
@@ -5772,6 +6857,8 @@ function App() {
     // For scheduled items, continue even if over is missing (resilient to post-resize collision detection issues)
 
     if (activeData.type === 'template') {
+      console.log('📥 TEMPLATE DROP (from left pane)');
+      
       // ========================================
       // DRAGGING FROM LEFT PANEL - CREATE NEW SCHEDULED ITEM
       // Use the ghost preview position for placement
@@ -5799,11 +6886,19 @@ function App() {
         typeId: task.typeId || null, // Preserve type association
         dateKey: targetDayKey, // NEW: Associate with target day
       };
+      
+      console.log('📦 New item to place:', newItem);
 
       // ========================================
-      // APPLY MOVE POLICY for template drops
+      // APPLY MOVE POLICY for template drops (uses centralized conflict gate)
       // ========================================
+      console.log('📊 Current MOVE_POLICY:', MOVE_POLICY);
+      console.log('📊 Current scheduledItems count:', scheduledItems.length);
+      console.log('📊 Target dayKey:', targetDayKey);
+      
       if (MOVE_POLICY === 'always') {
+        console.log('⚡ ALWAYS MODE: Committing immediately WITHOUT conflict gate');
+        
         // COMMIT THE CREATION IMMEDIATELY
         setScheduledItems((prev) => [...prev, newItem]);
         setNextId((prev) => prev + 1);
@@ -5811,36 +6906,76 @@ function App() {
         
         // Optional: Check conflicts for informational purposes
         if (CONFLICT_BEHAVIOR === 'inform') {
-          const sameDayEvents = scheduledItems.filter(e => 
-            (e.dateKey === newItem.dateKey || !e.dateKey) && e.id !== newItem.id
-          );
-          const overlaps = checkOverlap(newItem, sameDayEvents);
+          console.log('ℹ️ INFORM MODE: Checking conflicts post-commit');
+          const candidate = {
+            dateKey: newItem.dateKey,
+            startMinutes: newItem.startMinutes,
+            endMinutes: newItem.startMinutes + newItem.duration,
+          };
+          const occ = buildDayOccupancy(scheduledItems, newItem.id);
           
-          if (overlaps.length > 0) {
+          if (isConflicting(candidate, occ)) {
+            console.log('ℹ️ Conflict found (informational only)');
+            const conflicts = listConflicts(scheduledItems, newItem);
             setPendingEvent(null); // Not pending - already committed
-            setOverlappingEvents(overlaps);
+            setOverlappingEvents(conflicts);
             setShowOverlapModal(true);
           }
+        } else {
+          console.log('🔕 ALLOW MODE: No conflict checking at all');
         }
       } else {
-        // LEGACY: confirm-then-commit policy
-        const sameDayEvents = scheduledItems.filter(e => 
-          (e.dateKey === newItem.dateKey || !e.dateKey) && e.id !== newItem.id
-        );
-        const overlaps = checkOverlap(newItem, sameDayEvents);
+        // LEGACY: confirm-then-commit policy (uses bitset conflict gate)
+        console.log('🔐 Using confirm-then-commit policy for template drop');
         
-        if (overlaps.length > 0) {
-          // Overlap detected - show modal for confirmation
-          setPendingEvent(newItem);
-          setOverlappingEvents(overlaps);
-          setShowOverlapModal(true);
-          setGhostPosition(null);
-        } else {
-          // No overlap - add event directly
-          setScheduledItems((prev) => [...prev, newItem]);
-          setNextId((prev) => prev + 1);
-          setGhostPosition(null);
+        if (isCommittingRef.current) {
+          console.warn('⚠️ Already committing, ignoring');
+          return;
         }
+        isCommittingRef.current = true;
+        
+        console.log('🚪 Calling conflict gate for template drop...');
+        
+        console.log('  → isCommittingRef.current BEFORE gate:', isCommittingRef.current);
+        
+        const gateResult = assertNoConflictOrStageConfirm({
+          candidate: {
+            id: newItem.id,
+            dateKey: newItem.dateKey,
+            startMinutes: newItem.startMinutes,
+            endMinutes: newItem.startMinutes + newItem.duration,
+          },
+          events: scheduledItems,
+          setPendingAction: (action) => {
+            console.log('📌 Setting pending action from template drop:', action);
+            setPendingEvent(newItem);
+            setOverlappingEvents(action.neighbors);
+          },
+          openConflictModal: () => {
+            console.log('🚨 Opening conflict modal for template drop');
+            setShowOverlapModal(true);
+          },
+          onCommitSafe: () => {
+            console.log('✅ Template drop safe - committing');
+            setScheduledItems((prev) => {
+              const updated = [...prev, newItem];
+              console.log('  → Updated scheduledItems:', updated);
+              return updated;
+            });
+            setNextId((prev) => prev + 1);
+          },
+          isCommittingRef,
+        });
+        
+        console.log('🏁 Conflict gate returned:', gateResult);
+        console.log('  → isCommittingRef.current AFTER gate:', isCommittingRef.current);
+        
+        if (!gateResult) {
+          console.log('⚠️ Gate blocked commit (conflict), should NOT add to scheduledItems');
+          console.log('  → Modal should be open, waiting for user choice');
+        }
+        
+        setGhostPosition(null);
       }
     } else if (activeData.type === 'scheduled') {
       // ========================================
@@ -5890,44 +7025,52 @@ function App() {
         
         // Optional: Check conflicts for informational purposes
         if (CONFLICT_BEHAVIOR === 'inform') {
-          const otherEvents = scheduledItems.filter(e => 
-            e.id !== item.id && 
-            (e.dateKey === updatedItem.dateKey || (!e.dateKey && !updatedItem.dateKey))
-          );
-          const overlaps = checkOverlap(updatedItem, otherEvents);
+          const candidate = {
+            id: updatedItem.id,
+            dateKey: updatedItem.dateKey,
+            startMinutes: updatedItem.startMinutes,
+            endMinutes: updatedItem.startMinutes + (updatedItem.duration || 30),
+          };
+          const occ = buildDayOccupancy(scheduledItems, updatedItem.id);
           
-          if (overlaps.length > 0) {
-            // Show informational modal (doesn't revert the move)
+          if (isConflicting(candidate, occ)) {
+            const conflicts = listConflicts(scheduledItems, updatedItem, updatedItem.id);
             setPendingEvent(null); // Not pending - already committed
-            setOverlappingEvents(overlaps);
+            setOverlappingEvents(conflicts);
             setShowOverlapModal(true);
           }
         }
       } else {
-        // LEGACY: 'confirm-then-commit' policy (blocks move until confirmation)
-        const otherEvents = scheduledItems.filter(e => 
-          e.id !== item.id && 
-          (e.dateKey === updatedItem.dateKey || (!e.dateKey && !updatedItem.dateKey))
-        );
-        const overlaps = checkOverlap(updatedItem, otherEvents);
+        // LEGACY: confirm-then-commit policy (uses bitset conflict gate)
+        if (isCommittingRef.current) return;
+        isCommittingRef.current = true;
         
-        if (overlaps.length > 0) {
-          // Overlap detected - show modal for confirmation before committing
-          setPendingEvent(updatedItem);
-          setOverlappingEvents(overlaps);
-          setShowOverlapModal(true);
-          setGhostPosition(null);
-        } else {
-          // No overlap - update position directly
-          setScheduledItems((prev) =>
-            prev.map((schedItem) =>
-              schedItem.id === item.id
-                ? updatedItem
-                : schedItem
-            )
-          );
-          setGhostPosition(null);
-        }
+        assertNoConflictOrStageConfirm({
+          candidate: {
+            id: updatedItem.id,
+            dateKey: updatedItem.dateKey,
+            startMinutes: updatedItem.startMinutes,
+            endMinutes: updatedItem.startMinutes + (updatedItem.duration || 30),
+          },
+          events: scheduledItems,
+          setPendingAction: (action) => {
+            setPendingEvent(updatedItem);
+            setOverlappingEvents(action.neighbors);
+          },
+          openConflictModal: () => setShowOverlapModal(true),
+          onCommitSafe: () => {
+            setScheduledItems((prev) =>
+              prev.map((schedItem) =>
+                schedItem.id === item.id
+                  ? updatedItem
+                  : schedItem
+              )
+            );
+          },
+          isCommittingRef,
+        });
+        
+        setGhostPosition(null);
       }
     }
   }
@@ -5977,79 +7120,65 @@ function App() {
             HEADER: Hamburger + Controls
         ======================================== */}
         <header className="shrink-0 bg-white border-b border-gray-300 px-4 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <HamburgerButton />
-              <h2 className="text-xl font-bold text-gray-800">TimeBlocks</h2>
-            </div>
-            <div className="flex gap-2">
-              {/* Types Manager Button */}
-              <button
-                onClick={handleOpenTypesManager}
-                className="bg-gray-600 text-white px-3 py-2 rounded hover:bg-gray-700 transition-colors shadow text-sm font-medium"
-                title="Manage Types"
-              >
-                Types
-              </button>
-              {/* Create Event Button */}
-              <button
-                onClick={handleCreateTemplate}
-                className="bg-blue-600 text-white w-10 h-10 rounded-full flex items-center justify-center hover:bg-blue-700 transition-colors shadow-lg text-xl font-bold"
-                title="Create New Event Template"
-              >
-                +
-              </button>
-            </div>
+          <div className="flex items-center gap-3">
+            <HamburgerButton />
+            <h2 className="text-xl font-bold text-gray-800">TimeBlocks</h2>
           </div>
         </header>
         
         {/* ========================================
-            SPLIT PANE LAYOUT
+            APP GRID LAYOUT (CSS Grid with var(--sidebar-w))
         ======================================== */}
-        <div className="flex-1 min-h-0">
-          <SplitPane
-            left={
-              /* LEFT PANEL: Custom Event Templates */
-              <div className="h-full bg-gray-100 p-6 overflow-y-auto">
-                <div className="flex items-center justify-between mb-6">
-                  <h3 className="text-lg font-semibold text-gray-700">Event Templates</h3>
+        <div className="app-grid flex-1 relative">
+          {/* LEFT SIDEBAR: Custom Event Templates */}
+          <aside className="sidebar relative flex flex-col h-full bg-gray-100 overflow-hidden">
+            <LeftPaneHeader
+              onOpenCreateEvent={handleCreateTemplate}
+              onOpenTypes={handleOpenTypesManager}
+            />
+
+            {/* Scrollable events list area */}
+            <div className="flex-1 overflow-y-auto">
+              <div className="p-6">
+                {taskTemplates.length === 0 ? (
+                <div className="bg-white rounded-lg shadow p-6 text-center text-gray-500">
+                  <p className="mb-4">No event templates yet!</p>
+                  <p className="text-sm">Click the <strong className="text-blue-600">+</strong> button above to create your first event template.</p>
                 </div>
-          
-          {taskTemplates.length === 0 ? (
-            <div className="bg-white rounded-lg shadow p-6 text-center text-gray-500">
-              <p className="mb-4">No event templates yet!</p>
-              <p className="text-sm">Click the <strong className="text-blue-600">+</strong> button above to create your first event template.</p>
-            </div>
-          ) : (
-          <div className="space-y-4">
-              {taskTemplates.map((task) => (
-                <DraggableTaskBlock 
-                  key={task.id} 
-                  task={task} 
-                  onEdit={handleEditTemplate}
-                  onDelete={handleDeleteTemplate}
-                  types={types}
-                />
-            ))}
-          </div>
-          )}
-          
-                {/* Instructions */}
-                <div className="mt-8 p-4 bg-white rounded-lg shadow text-sm text-gray-600">
-                  <p className="font-semibold mb-2">How to use:</p>
-                  <ul className="list-disc list-inside space-y-1">
-                    <li>Click <strong>Types</strong> to manage event categories</li>
-                    <li>Click <strong>+</strong> to create event templates</li>
-                    <li>Click template to edit, trash icon to delete</li>
-                    <li>Drag templates to schedule on calendar</li>
-                    <li>Ctrl+Scroll to zoom calendar</li>
-                  </ul>
+              ) : (
+                <div className="space-y-4">
+                  {taskTemplates.map((task) => (
+                    <DraggableTaskBlock 
+                      key={task.id} 
+                      task={task} 
+                      onEdit={handleEditTemplate}
+                      onDelete={handleDeleteTemplate}
+                      types={types}
+                    />
+                  ))}
                 </div>
+              )}
+          
+              {/* Instructions */}
+              <div className="mt-8 p-4 bg-white rounded-lg shadow text-sm text-gray-600">
+                <p className="font-semibold mb-2">How to use:</p>
+                <ul className="list-disc list-inside space-y-1">
+                  <li>Click <strong>Types</strong> to manage event categories</li>
+                  <li>Click <strong>+</strong> to create event templates</li>
+                  <li>Click template to edit, trash icon to delete</li>
+                  <li>Drag templates to schedule on calendar</li>
+                  <li>Ctrl+Scroll to zoom calendar</li>
+                </ul>
               </div>
-            }
-            right={
-              /* RIGHT PANEL: Calendar */
-              <div className="h-full overflow-y-auto" id="calendar-container">
+              </div>
+            </div>
+
+            {/* Resize Handle */}
+            <SidebarResizeHandle onPointerDown={onPointerDown} />
+          </aside>
+
+          {/* RIGHT MAIN: Calendar */}
+          <main className="main-area h-full overflow-y-auto" id="calendar-container">
           <div className="p-6">
             <div className="mb-4">
               {/* View Mode + Weekend Controls */}
@@ -6123,6 +7252,7 @@ function App() {
                 resizeDraft: isResizing ? resizeDraft : null,
                 onResizeStart: (item, edge, clientY) => handleResizeStart(item, edge, clientY),
                 isResizing: isResizing,
+                conflictUi: conflictUi, // Pass conflict UI state (includes live conflict flag)
               }}
               getEventsForDay={(dayKey) => {
                 // Get events from store for this day, plus legacy events from scheduledItems
@@ -6142,9 +7272,10 @@ function App() {
               }}
             />
                 </div>
-              </div>
-            }
-          />
+              </main>
+
+          {/* Drag Proxy: Follows cursor during resize */}
+          <DragProxy x={proxyState.x} visible={proxyState.visible} />
         </div>
       </div>
 
