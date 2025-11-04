@@ -37,6 +37,7 @@ import { MOVE_POLICY, CONFLICT_BEHAVIOR } from './config/policies';
 import DateStrip from './components/DateStrip';
 import MultiDayCalendar from './components/MultiDayCalendar';
 import TopNav from './components/TopNav';
+import CreatePage from './components/Create/CreatePage';
 import { computeEventLayout } from './utils/overlap';
 import BackendTest from './pages/BackendTest';
 import { eventTypesApi, libraryEventsApi } from './services/api';
@@ -2847,12 +2848,14 @@ function App() {
         {/* ========================================
             VIEW ROUTING: Show different content based on activeView
         ======================================== */}
-        {activeView !== 'calendar' && (
+        {activeView === 'create' && (
+          <CreatePage />
+        )}
+        {activeView !== 'calendar' && activeView !== 'create' && (
           <div className="flex-1 flex items-center justify-center p-8">
             <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-8 text-center">
               <h2 className="text-2xl font-bold text-gray-800 mb-4">
                 {activeView === 'home' && '🏠 Home'}
-                {activeView === 'tasks' && '🧩 Tasks'}
                 {activeView === 'settings' && '⚙️ Settings'}
               </h2>
               <p className="text-gray-600 mb-4">

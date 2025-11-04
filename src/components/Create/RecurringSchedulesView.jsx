@@ -1,0 +1,17 @@
+import React from 'react';
+
+export default function RecurringSchedulesView() {
+  return (
+    <div className="flex-1 flex items-center justify-center p-8">
+      <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-8 text-center">
+        <h2 className="text-2xl font-bold text-gray-800 mb-4">
+          Recurring Schedules
+        </h2>
+        <p className="text-gray-600 mb-4">
+          This feature is coming soon!
+        </p>
+      </div>
+    </div>
+  );
+}
+
