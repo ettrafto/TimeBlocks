@@ -23,6 +23,7 @@ export default function CreatePage() {
   // Generate unique IDs
   const generateId = () => `project-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   const generateTaskId = () => `task-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  const generateSubtaskId = () => `subtask-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
   // Project handlers
   const handleAddProject = (data) => {
@@ -73,9 +74,84 @@ export default function CreatePage() {
     ));
   };
 
+  const handleToggleSubtasks = (projectId, taskId) => {
+    setProjects(projects.map(p =>
+      p.id === projectId
+        ? {
+            ...p,
+            tasks: (p.tasks || []).map(t =>
+              t.id === taskId
+                ? {
+                    ...t,
+                    isSubtasksOpen: !t.isSubtasksOpen,
+                    subtasks: t.subtasks ?? []
+                  }
+                : t
+            )
+          }
+        : p
+    ));
+  };
+
+  const handleAddSubtask = (projectId, taskId) => {
+    setProjects(projects.map(p =>
+      p.id === projectId
+        ? {
+            ...p,
+            tasks: (p.tasks || []).map(t =>
+              t.id === taskId
+                ? {
+                    ...t,
+                    subtasks: [...(t.subtasks ?? []), { id: generateSubtaskId(), title: 'New subtask' }],
+                    isSubtasksOpen: true
+                  }
+                : t
+            )
+          }
+        : p
+    ));
+  };
+
+  const handleUpdateSubtaskTitle = (projectId, taskId, subtaskId, newTitle) => {
+    setProjects(projects.map(p =>
+      p.id === projectId
+        ? {
+            ...p,
+            tasks: (p.tasks || []).map(t =>
+              t.id === taskId
+                ? {
+                    ...t,
+                    subtasks: (t.subtasks ?? []).map(s =>
+                      s.id === subtaskId ? { ...s, title: newTitle } : s
+                    )
+                  }
+                : t
+            )
+          }
+        : p
+    ));
+  };
+
+  const handleRemoveSubtask = (projectId, taskId, subtaskId) => {
+    setProjects(projects.map(p =>
+      p.id === projectId
+        ? {
+            ...p,
+            tasks: (p.tasks || []).map(t =>
+              t.id === taskId
+                ? {
+                    ...t,
+                    subtasks: (t.subtasks ?? []).filter(s => s.id !== subtaskId)
+                  }
+                : t
+            )
+          }
+        : p
+    ));
+  };
+
   const handleSubTaskClick = (projectId, taskId) => {
-    // Placeholder for future sub-task modal
-    console.log('Sub-task clicked for project:', projectId, 'task:', taskId);
+    handleToggleSubtasks(projectId, taskId);
   };
 
   const handleCalendarClick = (projectId, taskId) => {
@@ -86,6 +162,18 @@ export default function CreatePage() {
   const handleClockClick = (projectId, taskId) => {
     // Placeholder for future time assignment
     console.log('Clock clicked for project:', projectId, 'task:', taskId);
+  };
+
+  const handleRemoveTask = (projectId, taskId) => {
+    setProjects(projects.map(p =>
+      p.id === projectId
+        ? { ...p, tasks: (p.tasks || []).filter(t => t.id !== taskId) }
+        : p
+    ));
+  };
+
+  const handleProjectChange = (updatedProject) => {
+    setProjects(projects.map(p => p.id === updatedProject.id ? updatedProject : p));
   };
 
   return (
@@ -105,8 +193,14 @@ export default function CreatePage() {
               onAddTask={handleAddTask}
               onTaskTitleChange={handleTaskTitleChange}
               onSubTaskClick={handleSubTaskClick}
+              onToggleSubtasks={handleToggleSubtasks}
+              onAddSubtask={handleAddSubtask}
+              onUpdateSubtaskTitle={handleUpdateSubtaskTitle}
+              onRemoveSubtask={handleRemoveSubtask}
               onCalendarClick={handleCalendarClick}
               onClockClick={handleClockClick}
+              onRemoveTask={handleRemoveTask}
+              onProjectChange={handleProjectChange}
             />
           </div>
         )}

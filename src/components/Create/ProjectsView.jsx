@@ -1,8 +1,9 @@
 import React, { useRef, useEffect } from 'react';
 import ProjectColumn from './ProjectColumn';
 import AddProjectCard from './AddProjectCard';
+import HorizontalScrollbar from './HorizontalScrollbar';
 
-export default function ProjectsView({ projects, onAddProject, onTitleChange, onColorChange, onAddTask, onTaskTitleChange, onSubTaskClick, onCalendarClick, onClockClick }) {
+export default function ProjectsView({ projects, onAddProject, onTitleChange, onColorChange, onAddTask, onTaskTitleChange, onSubTaskClick, onToggleSubtasks, onAddSubtask, onUpdateSubtaskTitle, onRemoveSubtask, onCalendarClick, onClockClick, onRemoveTask, onProjectChange }) {
   const rowRef = useRef(null);
   const prevProjectsLengthRef = useRef(projects.length);
 
@@ -26,6 +27,7 @@ export default function ProjectsView({ projects, onAddProject, onTitleChange, on
     prevProjectsLengthRef.current = projects.length;
   }, [projects.length]);
 
+
   // Convert vertical wheel to horizontal scroll
   const handleWheel = (e) => {
     if (!rowRef.current) return;
@@ -37,19 +39,25 @@ export default function ProjectsView({ projects, onAddProject, onTitleChange, on
     }
   };
 
+
   const handleCreateProject = (data) => {
     onAddProject(data);
   };
 
   return (
-    <div className="h-full px-4 py-6 overflow-hidden">
-      <div
-        id="projects-scroll-row"
-        ref={rowRef}
-        onWheel={handleWheel}
-        className="flex gap-6 overflow-x-auto overflow-y-visible snap-x snap-mandatory scroll-smooth pb-2 smooth-scroll h-full"
-        aria-label="Projects Row"
-      >
+    <div className="h-full flex flex-col overflow-hidden">
+      {/* Horizontal Scrollbar */}
+      <HorizontalScrollbar scrollContainerRef={rowRef} />
+      
+      {/* Projects Row */}
+      <div className="flex-1 px-4 py-6 overflow-hidden">
+        <div
+          id="projects-scroll-row"
+          ref={rowRef}
+          onWheel={handleWheel}
+          className="flex gap-6 overflow-x-auto overflow-y-visible snap-x snap-mandatory scroll-smooth pb-2 h-full py-4 bg-transparent no-scrollbar"
+          aria-label="Projects Row"
+        >
         {/* Project Columns */}
         {projects.map((project) => (
           <div key={project.id} className="snap-start shrink-0 w-1/4 min-w-[280px]">
@@ -60,15 +68,22 @@ export default function ProjectsView({ projects, onAddProject, onTitleChange, on
               onAddTask={onAddTask}
               onTaskTitleChange={onTaskTitleChange}
               onSubTaskClick={onSubTaskClick}
+              onToggleSubtasks={onToggleSubtasks}
+              onAddSubtask={onAddSubtask}
+              onUpdateSubtaskTitle={onUpdateSubtaskTitle}
+              onRemoveSubtask={onRemoveSubtask}
               onCalendarClick={onCalendarClick}
               onClockClick={onClockClick}
+              onRemoveTask={onRemoveTask}
+              onProjectChange={onProjectChange}
             />
           </div>
         ))}
 
-        {/* Add Project Card - Always last */}
-        <div className="snap-start shrink-0 w-1/4 min-w-[280px]">
-          <AddProjectCard onCreate={handleCreateProject} />
+          {/* Add Project Card - Always last */}
+          <div className="snap-start shrink-0 w-1/4 min-w-[280px]">
+            <AddProjectCard onCreate={handleCreateProject} />
+          </div>
         </div>
       </div>
     </div>

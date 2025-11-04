@@ -138,3 +138,11 @@ body {
   box-sizing: border-box;
 }
 
+/* Allow text selection in inputs and textareas inside projects row */
+#projects-scroll-row input,
+#projects-scroll-row textarea,
+#projects-scroll-row [contenteditable="true"] {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
+
