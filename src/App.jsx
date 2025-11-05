@@ -42,6 +42,7 @@ import DiagnosticsPage from './pages/DiagnosticsPage';
 import { computeEventLayout } from './utils/overlap';
 import BackendTest from './pages/BackendTest';
 import { eventTypesApi, libraryEventsApi } from './services/api';
+import DebugToggle from './components/DebugToggle';
 
 // ========================================
 // PHASE 1 DIAGNOSTICS - Duplicate Draggable Detection
@@ -3270,6 +3271,9 @@ function App() {
         onClose={() => setShowTypesManager(false)}
         eventTemplates={taskTemplates}
       />
+
+      {/* Debug Toggle (dev only) */}
+      <DebugToggle />
     </DndContext>
   );
 }

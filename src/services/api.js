@@ -1,5 +1,8 @@
 // API Service Layer for TimeBlocks Backend
 
+import { TBLog } from "../../shared/logging/logger.js";
+import { newCorrelationId } from "../../shared/logging/correlation.js";
+
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8080";
 const WORKSPACE_ID = import.meta.env.VITE_WORKSPACE_ID ?? "ws_dev";
 const CALENDAR_ID = import.meta.env.VITE_CALENDAR_ID ?? "cal_main";
@@ -10,28 +13,54 @@ const withTimeout = (promise, ms = 12000) =>
     new Promise((_, rej) => setTimeout(() => rej(new Error(`Request timeout after ${ms}ms`)), ms))
   ]);
 
-export async function apiRequest(path, { method = "GET", body, headers } = {}) {
+export async function apiRequest(path, { method = "GET", body, headers = {}, correlationId } = {}) {
   const url = `${API_BASE}${path}`;
-  const opts = {
-    method,
-    headers: { "Content-Type": "application/json", ...(headers || {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  };
-  console.debug("🌐 API", method, url, body || "");
+  const cid = correlationId ?? newCorrelationId("api");
+  const g = TBLog.group(`API ${method} ${url}`, cid);
+  
   try {
+    // Add correlation ID to headers
+    const requestHeaders = { 
+      "Content-Type": "application/json", 
+      "X-Correlation-Id": cid,
+      ...headers 
+    };
+    
+    const opts = {
+      method,
+      headers: requestHeaders,
+      body: body ? JSON.stringify(body) : undefined,
+    };
+    
+    TBLog.kv("Request", { url, method, headers: requestHeaders, body });
+    
     const res = await withTimeout(fetch(url, opts));
+    const status = res.status;
+    
+    let json = null;
+    let text = null;
+    try { 
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        json = await res.json();
+      } else {
+        text = await res.text();
+      }
+    } catch { /* no body */ }
+    
+    TBLog.kv("Response", { status, json: json ?? text });
+    
     if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      console.error("🚨 API ERROR", method, url, res.status, text);
-      throw new Error(`API ${method} ${url} failed: ${res.status} ${text}`);
+      TBLog.error("API request failed", { status, error: json ?? text });
+      throw new Error(`API ${method} ${url} failed: ${status} ${JSON.stringify(json ?? text)}`);
     }
-    // Try JSON, fallback text
-    const ct = res.headers.get("content-type") || "";
-    if (ct.includes("application/json")) return await res.json();
-    return await res.text();
+    
+    return json ?? text;
   } catch (e) {
-    console.error("❌ API FETCH FAILED", method, url, e);
+    TBLog.error("Network/Client error", e);
     throw e;
+  } finally {
+    g.end();
   }
 }
 

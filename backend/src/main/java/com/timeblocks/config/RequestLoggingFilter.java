@@ -1,5 +1,6 @@
 package com.timeblocks.config;
 
+import com.timeblocks.logging.TBLog;
 import jakarta.servlet.*;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -22,6 +23,13 @@ public class RequestLoggingFilter implements Filter {
         HttpServletRequest req = (HttpServletRequest) request;
         HttpServletResponse res = (HttpServletResponse) response;
         
+        // Extract correlation ID from header or generate new one
+        String correlationId = req.getHeader("X-Correlation-Id");
+        if (correlationId == null || correlationId.isEmpty()) {
+            correlationId = TBLog.newCorrelationId("http");
+        }
+        TBLog.setCorrelationId(correlationId);
+        
         try {
             chain.doFilter(request, response);
         } finally {
@@ -31,10 +39,15 @@ public class RequestLoggingFilter implements Filter {
             String path = req.getRequestURI() + query;
             
             // Log request method, path, duration, and status
-            log.info("➡ {} {} [{}ms] status={}", req.getMethod(), path, ms, status);
+            log.info("➡ {} {} [{}ms] status={} [cid:{}]", req.getMethod(), path, ms, status, correlationId);
+            
+            // Clear MDC for this thread
+            TBLog.clearCorrelationId();
         }
     }
 }
+
+
 
 
 

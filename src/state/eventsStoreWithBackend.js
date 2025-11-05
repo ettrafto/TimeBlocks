@@ -2,6 +2,8 @@
 import { formatISO, parseISO, addMinutes } from 'date-fns';
 import { scheduledEventsApi } from '../services/api';
 import { isValidEvent, diagnoseEvents, cleanEvents } from '../utils/eventValidation';
+import { TBLog } from '../../shared/logging/logger.js';
+import { newCorrelationId } from '../../shared/logging/correlation.js';
 
 /**
  * Enhanced events store with backend synchronization
@@ -98,18 +100,23 @@ export function createEventsStoreWithBackend(initial = []) {
   const initialize = async () => {
     if (isInitialized) return;
     
+    const cid = newCorrelationId("store-init");
+    const g = TBLog.group("Store: Initialize (rehydrate events)", cid);
+    
     try {
       // Load events for current month (extend range as needed)
       const now = new Date();
       const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
       const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
       
+      TBLog.kv("Load params", { from: firstDay.toISOString(), to: lastDay.toISOString() });
+      
       const backendEvents = await scheduledEventsApi.getForRange(
         firstDay.toISOString(),
         lastDay.toISOString()
       );
 
-      console.log('📊 Raw backend events loaded:', backendEvents.length);
+      TBLog.info(`Raw backend events loaded: ${backendEvents.length}`);
       
       // Ensure backendEvents is an array
       const safeEvents = Array.isArray(backendEvents) ? backendEvents : [];
@@ -119,8 +126,7 @@ export function createEventsStoreWithBackend(initial = []) {
       const diagnosis = diagnoseEvents(frontendEvents);
       
       if (diagnosis.suspiciousCount > 0) {
-        console.warn('🔎 Suspicious events detected:', diagnosis.suspicious);
-        console.log('🧹 Cleaning invalid events...');
+        TBLog.warn('Suspicious events detected', diagnosis.suspicious);
       }
 
       // Clear existing and load only valid events from backend
@@ -135,52 +141,62 @@ export function createEventsStoreWithBackend(initial = []) {
 
       isInitialized = true;
       notify();
-      console.log('✅ Valid events loaded:', cleanedEvents.length);
-      if (diagnosis.suspiciousCount > 0) {
-        console.log(`🧹 Filtered out ${diagnosis.suspiciousCount} invalid events`);
-      }
+      TBLog.kv("Store state (post-init)", { 
+        totalEvents: cleanedEvents.length,
+        filteredOut: diagnosis.suspiciousCount 
+      });
     } catch (error) {
-      console.error('❌ Failed to load events from backend:', error);
+      TBLog.error('Failed to load events from backend', error);
       // Keep UI stable with empty events array instead of crashing
       byId.clear();
       byDate.clear();
       isInitialized = true;
       notify();
+    } finally {
+      g.end();
     }
   };
 
   const upsertEvent = async (e) => {
-    // Validate event before processing
-    if (!isValidEvent(e)) {
-      console.warn('⚠️ Attempted to upsert invalid event:', e);
-      return;
-    }
+    const cid = newCorrelationId("store-upsert");
+    const g = TBLog.group(`Store: upsertEvent`, cid);
     
-    const prev = byId.get(e.id);
-    
-    // Update local state immediately for responsiveness
-    byId.set(e.id, e);
-    if (prev?.dateKey !== e.dateKey) {
-      if (prev) unlink(prev.dateKey, e.id);
-      link(e.dateKey, e.id);
-    } else if (!prev) {
-      link(e.dateKey, e.id);
-    }
-    notify();
-
-    // Sync to backend
     try {
-      const backendEvent = toBackendEvent(e);
-      if (prev) {
-        await scheduledEventsApi.update(e.id, backendEvent);
-        console.log('✅ Event updated on backend:', e.id);
-      } else {
-        await scheduledEventsApi.create(backendEvent);
-        console.log('✅ Event created on backend:', e.id);
+      // Validate event before processing
+      if (!isValidEvent(e)) {
+        TBLog.warn('Attempted to upsert invalid event', e);
+        return;
       }
-    } catch (error) {
-      console.error('❌ Failed to sync event to backend:', error);
-      // TODO: Add retry logic or offline queue
+      
+      const prev = byId.get(e.id);
+      TBLog.kv("Event data", { event: e, isUpdate: !!prev });
+      
+      // Update local state immediately for responsiveness
+      byId.set(e.id, e);
+      if (prev?.dateKey !== e.dateKey) {
+        if (prev) unlink(prev.dateKey, e.id);
+        link(e.dateKey, e.id);
+      } else if (!prev) {
+        link(e.dateKey, e.id);
+      }
+      notify();
+
+      // Sync to backend
+      try {
+        const backendEvent = toBackendEvent(e);
+        if (prev) {
+          await scheduledEventsApi.update(e.id, backendEvent);
+          TBLog.info('Event updated on backend', { eventId: e.id });
+        } else {
+          await scheduledEventsApi.create(backendEvent);
+          TBLog.info('Event created on backend', { eventId: e.id });
+        }
+      } catch (error) {
+        TBLog.error('Failed to sync event to backend', error);
+        // TODO: Add retry logic or offline queue
+      }
+    } finally {
+      g.end();
     }
   };
 
@@ -227,20 +243,32 @@ export function createEventsStoreWithBackend(initial = []) {
   };
 
   const removeEvent = async (id) => {
-    const prev = byId.get(id);
-    if (!prev) return;
+    const cid = newCorrelationId("store-delete");
+    const g = TBLog.group(`Store: removeEvent`, cid);
     
-    // Update local state
-    byId.delete(id);
-    unlink(prev.dateKey, id);
-    notify();
-
-    // Sync to backend
     try {
-      await scheduledEventsApi.delete(id);
-      console.log('✅ Event deleted on backend:', id);
-    } catch (error) {
-      console.error('❌ Failed to delete event on backend:', error);
+      const prev = byId.get(id);
+      if (!prev) {
+        TBLog.warn('Attempted to remove non-existent event', { id });
+        return;
+      }
+      
+      TBLog.kv("Delete params", { id, event: prev });
+      
+      // Update local state
+      byId.delete(id);
+      unlink(prev.dateKey, id);
+      notify();
+
+      // Sync to backend
+      try {
+        await scheduledEventsApi.delete(id);
+        TBLog.info('Event deleted on backend', { eventId: id });
+      } catch (error) {
+        TBLog.error('Failed to delete event on backend', error);
+      }
+    } finally {
+      g.end();
     }
   };
 
