@@ -1,4 +1,5 @@
 import React from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 // Hamburger menu icon
 const HamburgerIcon = () => (
@@ -59,6 +60,10 @@ const NavButton = ({ icon: Icon, label, isActive, onClick }) => (
 
 // Main TopNav component
 export default function TopNav({ activeView, onViewChange, onQuickAdd, onToggleSidebar }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const showDiagnostics = import.meta.env.VITE_SHOW_DIAGNOSTICS === 'true';
+  
   const navItems = [
     { id: 'home', icon: HomeIcon, label: 'Home' },
     { id: 'create', icon: CreateIcon, label: 'Create' },
@@ -91,10 +96,20 @@ export default function TopNav({ activeView, onViewChange, onQuickAdd, onToggleS
               key={item.id}
               icon={item.icon}
               label={item.label}
-              isActive={activeView === item.id}
+              isActive={activeView === item.id || (item.id === 'settings' && location.pathname === '/admin/diagnostics')}
               onClick={() => onViewChange(item.id)}
             />
           ))}
+          
+          {/* Diagnostics Link - Only shown when flag is enabled */}
+          {showDiagnostics && (
+            <NavButton
+              icon={SettingsIcon}
+              label="Diagnostics"
+              isActive={location.pathname === '/admin/diagnostics'}
+              onClick={() => navigate('/admin/diagnostics')}
+            />
+          )}
           
           {/* Quick Add Button - Styled Differently */}
           <button

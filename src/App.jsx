@@ -17,7 +17,7 @@
  */
 
 import React, { useState, useSyncExternalStore, useMemo } from 'react';
-import { useLocation } from 'react-router-dom';
+import { Routes, Route, useLocation, Navigate, useNavigate } from 'react-router-dom';
 import {
   DndContext,
   DragOverlay,
@@ -37,7 +37,8 @@ import { MOVE_POLICY, CONFLICT_BEHAVIOR } from './config/policies';
 import DateStrip from './components/DateStrip';
 import MultiDayCalendar from './components/MultiDayCalendar';
 import TopNav from './components/TopNav';
-import CreatePage from './components/Create/CreatePage';
+import CreatePage from './pages/CreatePage';
+import DiagnosticsPage from './pages/DiagnosticsPage';
 import { computeEventLayout } from './utils/overlap';
 import BackendTest from './pages/BackendTest';
 import { eventTypesApi, libraryEventsApi } from './services/api';
@@ -1841,30 +1842,31 @@ function App() {
 
   // Load types from backend on mount
   React.useEffect(() => {
+    let cancelled = false;
     const loadTypes = async () => {
       try {
         const backendTypes = await eventTypesApi.getAll();
+        if (cancelled) return;
         // Convert backend format to frontend format
-        const frontendTypes = backendTypes.map(t => ({
+        const frontendTypes = Array.isArray(backendTypes) ? backendTypes.map(t => ({
           id: t.id,
           name: t.name,
           color: t.color,
           icon: t.icon,
-        }));
+        })) : [];
         setTypes(frontendTypes);
         setTypesLoaded(true);
         console.log('✅ Types loaded from backend:', frontendTypes.length);
       } catch (error) {
         console.error('❌ Failed to load types from backend:', error);
-        // Fallback to demo data
-        setTypes([
-          { id: 'type-work', name: 'Work', color: 'bg-blue-500' },
-          { id: 'type-personal', name: 'Personal', color: 'bg-green-500' },
-        ]);
+        if (cancelled) return;
+        // Still mark as loaded to allow UI to render with empty list
+        setTypes([]);
         setTypesLoaded(true);
       }
     };
     loadTypes();
+    return () => { cancelled = true; };
   }, []);
   
   // State: Custom task templates (user-created event types) - seeded with demo data
@@ -2808,13 +2810,60 @@ function App() {
     }
   }, [activeId, taskTemplates, scheduledItems]);
 
-  // Route handling: show backend test page if on /backend-test
+  // Route handling using React Router
   const location = useLocation();
+  const navigate = useNavigate();
+  const showDiagnostics = import.meta.env.VITE_SHOW_DIAGNOSTICS === 'true';
+
+  // Determine active view from pathname
+  const getActiveView = () => {
+    if (location.pathname === '/create') return 'create';
+    if (location.pathname === '/admin/diagnostics') return 'settings';
+    return activeView;
+  };
+
+  // If on special routes, render without DndContext wrapper
   if (location.pathname === '/backend-test') {
     return <BackendTest />;
   }
 
-  // Main calendar app (default route)
+  if (location.pathname === '/create') {
+    return (
+      <>
+        <TopNav 
+          activeView="create"
+          onViewChange={(view) => {
+            if (view === 'create') navigate('/create');
+            else if (view === 'calendar') navigate('/');
+            else navigate('/');
+          }}
+          onQuickAdd={() => {}}
+          onToggleSidebar={() => layoutStore.toggle()}
+        />
+        <CreatePage />
+      </>
+    );
+  }
+
+  if (location.pathname === '/admin/diagnostics' && showDiagnostics) {
+    return (
+      <>
+        <TopNav 
+          activeView="settings"
+          onViewChange={(view) => {
+            if (view === 'create') navigate('/create');
+            else if (view === 'calendar') navigate('/');
+            else navigate('/');
+          }}
+          onQuickAdd={() => {}}
+          onToggleSidebar={() => layoutStore.toggle()}
+        />
+        <DiagnosticsPage />
+      </>
+    );
+  }
+
+  // Main calendar app (default route) - needs DndContext
   return (
     <DndContext
       sensors={sensors}
@@ -2837,8 +2886,14 @@ function App() {
           TOP NAVIGATION BAR
       ======================================== */}
       <TopNav 
-        activeView={activeView}
-        onViewChange={setActiveView}
+        activeView={getActiveView()}
+        onViewChange={(view) => {
+          if (view === 'create') navigate('/create');
+          else {
+            setActiveView(view);
+            if (view !== 'calendar') navigate('/');
+          }
+        }}
         onQuickAdd={handleCreateTemplate}
         onToggleSidebar={() => layoutStore.toggle()}
       />
@@ -2847,11 +2902,9 @@ function App() {
         
         {/* ========================================
             VIEW ROUTING: Show different content based on activeView
+            Note: /create is handled by early return above
         ======================================== */}
-        {activeView === 'create' && (
-          <CreatePage />
-        )}
-        {activeView !== 'calendar' && activeView !== 'create' && (
+        {activeView !== 'calendar' && (
           <div className="flex-1 flex items-center justify-center p-8">
             <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-8 text-center">
               <h2 className="text-2xl font-bold text-gray-800 mb-4">
@@ -2887,7 +2940,11 @@ function App() {
             {/* Scrollable events list area */}
             <div className="flex-1 overflow-y-auto">
               <div className="p-6">
-                {taskTemplates.length === 0 ? (
+                {!typesLoaded ? (
+                  <div className="bg-white rounded-lg shadow p-6 text-center text-gray-500">
+                    <p className="mb-4">Loading types...</p>
+                  </div>
+                ) : taskTemplates.length === 0 ? (
                 <div className="bg-white rounded-lg shadow p-6 text-center text-gray-500">
                   <p className="mb-4">No event templates yet!</p>
                   <p className="text-sm">Click the <strong className="text-blue-600">+</strong> button above to create your first event template.</p>

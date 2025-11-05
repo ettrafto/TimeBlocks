@@ -1,7 +1,10 @@
 // src/dev/consoleNoiseFilter.js
 // Dev-only console noise filter & diagnosis for Chrome extension port-close warnings.
 
-const TARGET_TEXT = "The message port closed before a response was received";
+const TARGET_TEXTS = [
+  "The message port closed before a response was received",
+  "A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received",
+];
 
 let warnedOnce = false;
 function maybeDiagnosticNote(args) {
@@ -22,30 +25,40 @@ function maybeDiagnosticNote(args) {
 export function installDevConsoleNoiseFilter() {
   if (import.meta.env.PROD) return;
 
-  const originalError = console.error.bind(console);
-  console.error = (...args) => {
-    // Filter only the known extension noise; pass everything else through.
-    const first = args[0];
-    const isTarget =
-      typeof first === "string" && first.includes(TARGET_TEXT);
+  const matchesTarget = (firstArg) =>
+    typeof firstArg === "string" && TARGET_TEXTS.some((t) => firstArg.includes(t));
 
-    if (isTarget) {
+  const originalError = console.error.bind(console);
+  const originalWarn = console.warn.bind(console);
+
+  console.error = (...args) => {
+    const first = args[0];
+    if (matchesTarget(first)) {
       maybeDiagnosticNote(args);
-      return; // swallow this noisy line
+      return; // swallow
     }
     originalError(...args);
   };
 
+  console.warn = (...args) => {
+    const first = args[0];
+    if (matchesTarget(first)) {
+      maybeDiagnosticNote(args);
+      return; // swallow
+    }
+    originalWarn(...args);
+  };
+
   // Also filter global errors/unhandled rejections that surface same message
   const onErr = (ev) => {
-    if (typeof ev?.message === "string" && ev.message.includes(TARGET_TEXT)) {
+    if (typeof ev?.message === "string" && TARGET_TEXTS.some((t) => ev.message.includes(t))) {
       maybeDiagnosticNote([ev.message, ev.filename]);
       ev.preventDefault(); // dev-only swallow
     }
   };
   const onRej = (ev) => {
     const reasonStr = String(ev?.reason ?? "");
-    if (reasonStr.includes(TARGET_TEXT)) {
+    if (TARGET_TEXTS.some((t) => reasonStr.includes(t))) {
       maybeDiagnosticNote([reasonStr]);
       ev.preventDefault(); // dev-only swallow
     }
@@ -57,6 +70,7 @@ export function installDevConsoleNoiseFilter() {
   // Return an optional disposer if you ever want to uninstall in hot-reload scenarios
   return () => {
     console.error = originalError;
+    console.warn = originalWarn;
     window.removeEventListener("error", onErr);
     window.removeEventListener("unhandledrejection", onRej);
   };

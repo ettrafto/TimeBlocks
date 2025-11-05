@@ -111,8 +111,11 @@ export function createEventsStoreWithBackend(initial = []) {
 
       console.log('📊 Raw backend events loaded:', backendEvents.length);
       
+      // Ensure backendEvents is an array
+      const safeEvents = Array.isArray(backendEvents) ? backendEvents : [];
+      
       // Diagnose events for issues
-      const frontendEvents = backendEvents.map(fromBackendEvent);
+      const frontendEvents = safeEvents.map(fromBackendEvent);
       const diagnosis = diagnoseEvents(frontendEvents);
       
       if (diagnosis.suspiciousCount > 0) {
@@ -138,8 +141,11 @@ export function createEventsStoreWithBackend(initial = []) {
       }
     } catch (error) {
       console.error('❌ Failed to load events from backend:', error);
-      // Fall back to localStorage data already loaded
+      // Keep UI stable with empty events array instead of crashing
+      byId.clear();
+      byDate.clear();
       isInitialized = true;
+      notify();
     }
   };
 

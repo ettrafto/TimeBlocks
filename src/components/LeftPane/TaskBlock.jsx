@@ -14,15 +14,12 @@ export default function TaskBlock({ task, onClick, onDelete, types = [] }) {
   // ========================================
   // SAFELY FIND TYPE NAME (guard against undefined types array)
   // ========================================
-  const typeName = task.typeId && types && types.length > 0
-    ? types.find(t => t.id === task.typeId)?.name 
-    : null;
+  const safeTypes = Array.isArray(types) ? types : [];
+  const type = task.typeId ? safeTypes.find(t => t.id === task.typeId) : null;
+  const typeName = type?.name ?? (task.typeId ? "Unknown Type" : null);
   
-  // Debug: Log if type lookup fails
-  if (task.typeId && (!types || types.length === 0)) {
-    console.warn('⚠️ TaskBlock: types array is empty/undefined for event:', task.name || task.label);
-  }
-  if (task.typeId && types && types.length > 0 && !typeName) {
+  // Debug: Log if type lookup fails (only in dev, don't spam)
+  if (task.typeId && safeTypes.length > 0 && !type) {
     console.warn('⚠️ TaskBlock: type not found for typeId:', task.typeId, 'in event:', task.name || task.label);
   }
 

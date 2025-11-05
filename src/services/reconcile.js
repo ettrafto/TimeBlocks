@@ -38,19 +38,38 @@ export async function reconcileBackendEvents() {
     
     console.warn(`🔎 Found ${diagnosis.suspiciousCount} suspicious events:`, diagnosis.suspicious);
     
-    // Delete invalid events from backend
-    const deletePromises = diagnosis.suspicious.map(async ({ event, issues }) => {
-      try {
-        console.log(`🗑️ Deleting invalid event ${event.id}:`, issues);
-        await scheduledEventsApi.delete(event.id);
-        return { id: event.id, success: true, issues };
-      } catch (error) {
-        console.error(`❌ Failed to delete event ${event.id}:`, error);
-        return { id: event.id, success: false, error: error.message, issues };
+    // Delete invalid events from backend SEQUENTIALLY with small retry/backoff to avoid SQLite locks
+    const deleteResults = [];
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    for (const { event, issues } of diagnosis.suspicious) {
+      let attempt = 0;
+      let success = false;
+      let lastError = null;
+      console.log(`🗑️ Deleting invalid event ${event.id}:`, issues);
+      while (attempt < 3 && !success) {
+        try {
+          await scheduledEventsApi.delete(event.id);
+          deleteResults.push({ id: event.id, success: true, issues });
+          success = true;
+        } catch (error) {
+          lastError = error;
+          const msg = String(error?.message || "");
+          const shouldRetry = /SQLITE_BUSY|database is locked|ECONNRESET|ETIMEDOUT|5\d\d/.test(msg);
+          attempt += 1;
+          if (shouldRetry && attempt < 3) {
+            const backoffMs = 200 * attempt; // 200ms, 400ms
+            console.warn(`⚠️ Delete failed for ${event.id} (attempt ${attempt}) — retrying in ${backoffMs}ms...`);
+            await sleep(backoffMs);
+          } else {
+            console.error(`❌ Failed to delete event ${event.id}:`, error);
+            deleteResults.push({ id: event.id, success: false, error: msg, issues });
+            break;
+          }
+        }
       }
-    });
-    
-    const deleteResults = await Promise.all(deletePromises);
+      // small spacing to avoid hammering DB
+      if (success) await sleep(50);
+    }
     const deletedCount = deleteResults.filter(r => r.success).length;
     
     console.log(`✅ Reconciliation complete: Deleted ${deletedCount}/${diagnosis.suspiciousCount} invalid events`);

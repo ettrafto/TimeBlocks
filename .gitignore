@@ -28,3 +28,5 @@ yarn-error.log*
 .env.test.local
 .env.production.local
 
+
+# Gradlebackend/.gradle/backend/build/backend/.gradle-wrapper/*.gradle.kts.bak

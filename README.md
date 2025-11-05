@@ -1,6 +1,6 @@
 # TimeBlocks Experiment
 
-An experimental time-blocking calendar built with React and @dnd-kit/core.
+An experimental time-blocking calendar built with React and @dnd-kit/core with Spring Boot backend.
 
 ## Features
 
@@ -9,21 +9,93 @@ An experimental time-blocking calendar built with React and @dnd-kit/core.
 - **Rearrange**: Move tasks around within the calendar to reschedule
 - **Reusable Tasks**: Task templates remain in the left panel after dragging (they're copied, not moved)
 - **Visual Time Grid**: Clear hourly and half-hourly divisions from 8 AM to 5 PM
+- **Backend Integration**: Full CRUD for Event Types and Scheduled Events via Spring Boot API
 
-## Getting Started
+## Dev Quickstart
 
-1. **Install dependencies:**
+### 1) Backend Setup
+
+1. **Start the backend:**
+   ```bash
+   # Windows
+   cd backend
+   gradlew.bat bootRun --args='--spring.profiles.active=dev'
+   
+   # Linux/Mac
+   cd backend
+   ./gradlew bootRun --args='--spring.profiles.active=dev'
+   ```
+
+2. **Verify backend is running:**
+   ```bash
+   curl http://localhost:8080/api/health
+   ```
+   Expected response: `{"ok":true,"service":"timeblocks-backend"}`
+
+3. **Check backend logs:**
+   - Request lines: `➡ GET /api/health [5ms] status=200`
+   - Hibernate SQL: `Hibernate: select ...` with bound parameters (TRACE level)
+
+### 2) Frontend Setup
+
+1. **Create `.env.local` file** (don't commit to repo):
+   ```env
+   VITE_API_BASE=http://localhost:8080
+   VITE_WORKSPACE_ID=ws_dev
+   VITE_CALENDAR_ID=cal_main
+   ```
+
+2. **Install dependencies:**
    ```bash
    npm install
    ```
 
-2. **Run development server:**
+3. **Run development server:**
    ```bash
    npm run dev
    ```
 
-3. **Open your browser:**
+4. **Open your browser:**
    Navigate to the URL shown in the terminal (usually `http://localhost:5173`)
+
+### 3) Testing the Integration
+
+1. **Visit `/create` page:**
+   - Health check should show `{"ok":true,"service":"timeblocks-backend"}`
+   - Event Types section should list seeded types (Deep Work, Workout)
+   - Scheduled Events section should show sample events
+
+2. **Create a Type:**
+   - Fill in name, color, icon, defaults JSON
+   - Click "Create Type"
+   - Type should appear in the list immediately
+
+3. **Create a Scheduled Event:**
+   - Fill in title, select type, set start/end times
+   - Click "Create Event"
+   - Event should appear in the list immediately
+
+4. **Calendar view:**
+   - Navigate to calendar view
+   - Events should load for the current month
+   - If backend is offline, calendar renders gracefully with 0 events (no crash)
+
+### 4) Troubleshooting
+
+- **net::ERR_CONNECTION_REFUSED**: Backend not running or wrong `VITE_API_BASE`
+- **Types array is empty/undefined**: Types loading is guarded; TaskBlock shows "Unknown Type" instead of crashing
+- **Backend offline**: Frontend renders gracefully with empty lists
+- **Console noise**: Ignore "The message port closed before a response was received" (browser extension noise)
+
+### Sanity Checklist
+
+- ✅ Backend health endpoint responds: `curl http://localhost:8080/api/health`
+- ✅ Backend logs show request traces: `➡ GET /api/... [ms] status=...`
+- ✅ Backend logs show SQL queries with bound parameters (TRACE level)
+- ✅ Create page shows health status
+- ✅ Create page lists Types (or empty list without crashing)
+- ✅ Create page lists Scheduled Events (or empty list without crashing)
+- ✅ Calendar view doesn't crash when backend is offline
 
 ## How It Works
 
