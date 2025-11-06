@@ -65,7 +65,7 @@ public class LibraryEventController {
             
             Map<String, Object> dbResult = new HashMap<>();
             dbResult.put("id", saved.getId());
-            dbResult.put("title", saved.getTitle());
+            dbResult.put("title", saved.getName());
             TBLog.kv("DB created", dbResult);
             TBLog.info("Created library event: {}", saved.getId());
             

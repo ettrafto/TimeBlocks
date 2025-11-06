@@ -18,3 +18,5 @@ public interface SubtaskRepository extends JpaRepository<Subtask, Integer> {
     List<Subtask> findByTaskIdFlexible(@Param("taskId") Integer taskId, @Param("task_id") Integer task_id);
 }
 
+
+

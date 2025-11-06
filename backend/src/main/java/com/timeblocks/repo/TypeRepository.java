@@ -11,3 +11,5 @@ public interface TypeRepository extends JpaRepository<Type, Integer> {
     List<Type> findAllByOrderByIdAsc();
 }
 
+
+

@@ -17,7 +17,7 @@ spring:
             sql: trace  # show bound parameter values
   flyway:
     enabled: true
-    locations: classpath:db/migration/sqlite
+    locations: classpath:db/migration/common,classpath:db/migration/sqlite,classpath:db/migration/seed
     baseline-on-migrate: true
     mixed: true
 
@@ -27,8 +27,12 @@ server:
 logging:
   level:
     root: INFO
+    org.springframework.web.filter.CommonsRequestLoggingFilter: OFF
     org.springframework.web: INFO
     org.hibernate.SQL: DEBUG
     org.hibernate.orm.jdbc.bind: TRACE
+    org.springframework.jdbc.core: DEBUG
+    org.springframework.transaction: DEBUG
+    com.zaxxer.hikari: INFO
     com.timeblocks: DEBUG
 

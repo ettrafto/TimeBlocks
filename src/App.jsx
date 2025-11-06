@@ -28,7 +28,7 @@ import {
   useDndMonitor,
 } from '@dnd-kit/core';
 import { restrictToWindowEdges } from '@dnd-kit/modifiers';
-import { format, formatISO } from 'date-fns';
+import { format, formatISO, parseISO, differenceInMinutes } from 'date-fns';
 import { dateStore } from './state/dateStore';
 import { eventsStore } from './state/eventsStoreWithBackend';
 import { uiStore } from './state/uiStore';
@@ -36,12 +36,16 @@ import { layoutStore } from './state/layoutStore';
 import { MOVE_POLICY, CONFLICT_BEHAVIOR } from './config/policies';
 import DateStrip from './components/DateStrip';
 import MultiDayCalendar from './components/MultiDayCalendar';
+import SidebarEvents from './components/Sidebar/SidebarEvents';
+import { arrayMove } from './utils/dnd';
+import { useTypesStore } from './state/typesStore';
 import TopNav from './components/TopNav';
 import CreatePage from './pages/CreatePage';
 import DiagnosticsPage from './pages/DiagnosticsPage';
 import { computeEventLayout } from './utils/overlap';
 import BackendTest from './pages/BackendTest';
-import { eventTypesApi, libraryEventsApi } from './services/api';
+import ApiTestingPage from './pages/api-testing';
+import { eventTypesApi, libraryEventsApi, scheduledEventsApi, CALENDAR_ID } from './services/api';
 import DebugToggle from './components/DebugToggle';
 
 // ========================================
@@ -774,7 +778,7 @@ function EventEditorModal({ isOpen, editingEvent, onSave, onCancel, types }) {
               value={name}
               onChange={(e) => setName(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="e.g., Team Meeting"
+              placeholder="e.g., Meeting"
               required
             />
           </div>
@@ -1450,9 +1454,8 @@ function CalendarGrid({
         </div>
       )}
 
-      {/* Ghost/shadow preview - shows where dragged item will land */}
-      {/* Only render ghost in the grid that's currently hovered */}
-      {isHoveringThisGrid && (
+      {/* Ghost/shadow preview - render when hovered OR when ghost targets this day */}
+      {(isHoveringThisGrid || (ghostPosition && ghostPosition.dayKey === dayKey)) && (
         <GhostEvent 
           ghostPosition={ghostPosition} 
           pixelsPerSlot={pixelsPerSlot}
@@ -1524,11 +1527,27 @@ function parseNs(id) {
 // DnD Monitor Bridge - Must be child of DndContext
 function DndMonitorBridge() {
   useDndMonitor({
-    onDragOver: ({ over }) => {
-      uiStore.setDragOverNs(parseNs(over?.id));
+    onDragStart: (e) => {
+      console.log('🎯 DnD start', { id: e.active?.id, data: e.active?.data?.current });
     },
-    onDragCancel: () => uiStore.clearDragOverNs(),
-    onDragEnd: () => uiStore.clearDragOverNs(),
+    onDragOver: ({ over }) => {
+      const ns = parseInt ? null : null; // no-op to keep linter quiet
+      const id = over?.id;
+      const parsed = parseNs(id);
+      console.log('➡️  DnD over', { id, parsed });
+      uiStore.setDragOverNs(parsed);
+    },
+    onDragMove: (e) => {
+      console.log('🧭 DnD move', { id: e.active?.id, over: e.over?.id, delta: e.delta });
+    },
+    onDragEnd: (e) => {
+      console.log('🏁 DnD end', { id: e.active?.id, over: e.over?.id });
+      uiStore.clearDragOverNs();
+    },
+    onDragCancel: () => {
+      console.log('⛔ DnD cancel');
+      uiStore.clearDragOverNs();
+    },
   });
   return null;
 }
@@ -1821,6 +1840,7 @@ function App() {
   const displayedDays = useMemo(() => getDisplayedDays(), [selectedDate, viewMode, includeWeekends]);
   const visibleKeys = useMemo(() => getVisibleKeys(), [selectedDate, viewMode, includeWeekends]);
   const dateKey = getDateKey();
+
   
   // When a specific slot's date changes via a menu, re-anchor to that date
   const handleChangeDay = (index, newDate) => {
@@ -1870,23 +1890,8 @@ function App() {
     return () => { cancelled = true; };
   }, []);
   
-  // State: Custom task templates (user-created event types) - seeded with demo data
-  const [taskTemplates, setTaskTemplates] = useState([
-    { 
-      id: 'template-demo1', 
-      name: 'Team Meeting', 
-      duration: 30, 
-      color: 'bg-purple-500', 
-      typeId: 'type-work' 
-    },
-    { 
-      id: 'template-demo2', 
-      name: 'Lunch Break', 
-      duration: 45, 
-      color: 'bg-green-500', 
-      typeId: 'type-personal' 
-    },
-  ]);
+  // State: Custom task templates (user-created event types)
+  const [taskTemplates, setTaskTemplates] = useState([]);
   
   // State: scheduled items in the calendar
   const [scheduledItems, setScheduledItems] = useState([]);
@@ -1932,6 +1937,57 @@ function App() {
 
   // State: Active navigation view
   const [activeView, setActiveView] = useState('calendar');
+
+  // Ensure backend-backed events store is initialized when entering calendar
+  React.useEffect(() => {
+    if (activeView !== 'calendar') return;
+    try {
+      console.log('🪝 Initializing events store (backend)');
+      eventsStore.initialize?.();
+    } catch (e) {
+      console.warn('⚠️ eventsStore.initialize not available', e);
+    }
+  }, [activeView]);
+
+  // Load scheduled events for visible range on mount/when range changes (after activeView exists)
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (activeView !== 'calendar') return;
+        if (!displayedDays || displayedDays.length === 0) return;
+        const first = displayedDays[0];
+        const last = displayedDays[displayedDays.length - 1];
+        const from = new Date(first.getFullYear(), first.getMonth(), first.getDate(), 0, 0, 0, 0).toISOString();
+        const to = new Date(last.getFullYear(), last.getMonth(), last.getDate(), 23, 59, 59, 999).toISOString();
+        console.log('📬 Loading scheduled (visible range)', { from, to, CALENDAR_ID });
+        const rows = await scheduledEventsApi.getForRange(from, to, CALENDAR_ID);
+        console.log('📦 API returned rows', { count: Array.isArray(rows) ? rows.length : 0, sample: rows?.[0] });
+        const mapped = (Array.isArray(rows) ? rows : []).map((o) => {
+          const s = parseISO(o.startUtc);
+          const e = parseISO(o.endUtc);
+          const dk = formatISO(s, { representation: 'date' });
+          const dayStart = new Date(s); dayStart.setHours(START_HOUR, 0, 0, 0);
+          const startMin = Math.max(0, differenceInMinutes(s, dayStart));
+          const dur = Math.max(15, differenceInMinutes(e, s));
+          return {
+            id: String(o.id),
+            label: o.title,
+            dateKey: dk,
+            startMinutes: startMin,
+            duration: dur,
+            typeId: o.typeId ?? null,
+          };
+        });
+        console.log('🗂️ Mapped scheduledItems', { count: mapped.length, days: [...new Set(mapped.map(m => m.dateKey))] });
+        if (!cancelled) setScheduledItems(mapped);
+      } catch (e) {
+        console.error('❌ Failed to load visible scheduled events', e);
+        if (!cancelled) setScheduledItems([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [activeView, displayedDays.map(d => d.toDateString()).join('|')]);
 
   // State: Calendar popover for active day selector
   const [calendarOpen, setCalendarOpen] = useState(false);
@@ -2439,29 +2495,22 @@ function App() {
       return;
     }
 
-    // For template drags, require being over the calendar
-    // For scheduled drags, be resilient to missing 'over' (collision detection can miss after resize)
-    if (activeData.type === 'template') {
-      const isOverCalendar = over?.id === 'calendar' || over?.id?.includes('::calendar');
-      if (!over || !isOverCalendar) {
-        setGhostPosition(null);
-        return;
-      }
-    }
     // For scheduled items, continue even if over is null (use delta.y from current position)
 
-    // Get calendar element to calculate position
-    // FIX: Null-safe lookup chain - over can be undefined after resize
-    // Handle both namespaced and non-namespaced calendar IDs
-    const calendarElement = over?.node?.current || calendarDomRef.current || 
-      document.querySelector('[data-droppable-id="calendar"]') ||
-      document.querySelector('[data-droppable-id*="::calendar"]');
+    // Resolve target calendar column element for ghost calculations
+    const isOverCalendar = over?.id === 'calendar' || (typeof over?.id === 'string' && over?.id.includes('::calendar'));
+    let targetEl = over?.node?.current || null;
+    const activatorEvent = event.activatorEvent;
+    const pointerX = activatorEvent && 'clientX' in activatorEvent ? (activatorEvent.clientX + (event.delta?.x || 0)) : null;
+    const pointerY = activatorEvent && 'clientY' in activatorEvent ? (activatorEvent.clientY + (event.delta?.y || 0)) : null;
+    if (!targetEl && pointerX != null && pointerY != null) {
+      const el = document.elementFromPoint(pointerX, pointerY);
+      targetEl = el && (el.closest('[data-droppable-id*="::calendar"]') || el.closest('[data-droppable-id="calendar"]'));
+    }
+    const calendarElement = targetEl || calendarDomRef.current || document.querySelector('[data-droppable-id="calendar"]') || document.querySelector('[data-droppable-id*="::calendar"]');
     if (!calendarElement) {
-      console.warn('⚠️ Calendar element not found - all three lookups failed:', {
-        hasOver: !!over,
-        hasOverNode: !!over?.node,
-        hasCalendarDomRef: !!calendarDomRef.current,
-      });
+      console.warn('⚠️ Calendar element not found', { hasOver: !!over, overId: over?.id, hasDomRef: !!calendarDomRef.current, pointerX, pointerY });
+      setGhostPosition(null);
       return;
     }
 
@@ -2470,29 +2519,34 @@ function App() {
     let taskInfo;
 
     if (activeData.type === 'template') {
-      // ========================================
-      // DRAGGING FROM LEFT PANEL - Show ghost at mouse position
-      // ========================================
-      const activatorEvent = event.activatorEvent;
-      
+      // DRAGGING FROM LEFT PANEL - Compute ghost using target column under pointer
       if (!activatorEvent || !('clientY' in activatorEvent)) {
+        console.warn('⚠️ No activatorEvent coordinates for template drag');
+        setGhostPosition(null);
         return;
       }
-      
       const currentMouseY = activatorEvent.clientY + delta.y;
       const offsetY = currentMouseY - rect.top;
-      
-      // Convert to minutes and snap to 15-min increment - using dynamic slot height
       const minutes = pixelsToMinutes(offsetY, pixelsPerSlot);
       const snappedMinutes = snapToIncrement(minutes);
-      
-      // Clamp to calendar bounds
       const totalMinutes = (END_HOUR - START_HOUR) * 60;
       finalMinutes = Math.max(0, Math.min(snappedMinutes, totalMinutes - MINUTES_PER_SLOT));
-      
       taskInfo = activeData.task;
-      
+      const dayKeyForGhost = calendarElement.getAttribute('data-day-key') || null;
+      console.log('🟦 Ghost compute (template)', { overId: over?.id, pointerX, pointerY, offsetY, minutes, snappedMinutes, finalMinutes, dayKeyForGhost });
+      setGhostPosition({ startMinutes: finalMinutes, dayKey: dayKeyForGhost, task: taskInfo });
+      return;
     } else if (activeData.type === 'scheduled') {
+      // If dropping a scheduled event onto a Type in the sidebar, unschedule it
+      const overIdStr = over?.id ? String(over.id) : '';
+      if (overIdStr.startsWith('type-drop:')) {
+        const item = activeData.item;
+        const dropTypeId = overIdStr.split(':')[1];
+        console.log('🗑️ Unschedule event via sidebar drop', { eventId: item.id, dropTypeId });
+        setScheduledItems(prev => prev.filter(e => e.id !== item.id));
+        setGhostPosition(null);
+        return;
+      }
       // ========================================
       // REPOSITIONING EXISTING EVENT - Show ghost at new position
       // RESILIENT: Works even if over is null (collision detection miss)
@@ -2522,11 +2576,9 @@ function App() {
       return;
     }
     
-    // Update ghost position
-    setGhostPosition({
-      startMinutes: finalMinutes,
-      task: taskInfo,
-    });
+    // Update ghost position for scheduled move
+    console.log('🟪 Ghost compute (scheduled)', { finalMinutes });
+    setGhostPosition({ startMinutes: finalMinutes, dayKey: over?.data?.current?.dayKey || null, task: taskInfo });
   }
 
   function handleDragEnd(event) {
@@ -2558,12 +2610,47 @@ function App() {
 
     const activeData = active.data.current;
 
+    // Sidebar reordering (types / tasks)
+    if (activeData?.context === 'sidebar') {
+      if (!over) return;
+      const ui = uiStore.get();
+
+      if (activeData.kind === 'type') {
+        const currentOrder = (ui.typeOrder && ui.typeOrder.length)
+          ? ui.typeOrder.map(String)
+          : (useTypesStore.getState().types || []).map(t => String(t.id));
+        const from = currentOrder.indexOf(String(active.id));
+        const to = currentOrder.indexOf(String(over.id));
+        if (from !== -1 && to !== -1 && from !== to) {
+          const next = arrayMove(currentOrder, from, to);
+          uiStore.setTypeOrder(next);
+        }
+        return;
+      }
+
+      if (activeData.kind === 'task') {
+        const typeId = String(activeData.typeId);
+        const tasks = (useCreatePageStore.getState().tasksByType?.[typeId]) || [];
+        const base = (ui.eventOrderByType?.[typeId] && ui.eventOrderByType[typeId].length)
+          ? ui.eventOrderByType[typeId].map(String)
+          : tasks.map(t => String(t.id));
+        const from = base.indexOf(String(active.id));
+        const to = (over?.data?.current?.eventId) ? base.indexOf(String(over.data.current.eventId)) : base.indexOf(String(over?.id));
+        if (from !== -1 && to !== -1 && from !== to) {
+          const next = arrayMove(base, from, to);
+          uiStore.setEventOrderForType(typeId, next);
+        }
+        return;
+      }
+    }
+
     // FIX: Only require 'over' for template drags (new placements)
     // For scheduled drags (repositioning), allow fallback calculation even if over is null
     if (activeData?.type === 'template') {
-      // Templates must be dropped on a calendar (handle both namespaced and non-namespaced IDs)
-      const isCalendarDrop = over?.id === 'calendar' || over?.id?.includes('::calendar');
-      if (!isCalendarDrop) {
+      const overIsCalendar = over?.id === 'calendar' || (typeof over?.id === 'string' && over?.id.includes('::calendar'));
+      const hasGhost = !!ghostPosition && (ghostPosition.startMinutes != null);
+      console.log('🟨 Drop gate', { overId: over?.id, overIsCalendar, hasGhost, ghostPosition });
+      if (!overIsCalendar && !hasGhost) {
         setGhostPosition(null);
         return;
       }
@@ -2579,9 +2666,8 @@ function App() {
       // ========================================
       
       if (!ghostPosition) {
-        console.warn('⚠️ No ghost position available, cannot place event');
-        setGhostPosition(null);
-        return;
+        console.warn('⚠️ No ghost position available, using START_HOUR fallback');
+        ghostPosition = { startMinutes: (typeof START_HOUR === 'number' ? START_HOUR : 9) * 60, dayKey: dateKey, task: activeData.task };
       }
       
       const task = activeData.task;
@@ -2589,7 +2675,7 @@ function App() {
       const duration = task.duration || 30; // Use task duration or default to 30 min
 
       // Extract target dayKey from drop zone (if multi-day)
-      const targetDayKey = over?.data?.current?.dayKey || dateKey;
+      const targetDayKey = over?.data?.current?.dayKey || ghostPosition?.dayKey || dateKey;
       
       const newItem = {
         id: `scheduled-${nextId}`,
@@ -2828,6 +2914,10 @@ function App() {
     return <BackendTest />;
   }
 
+  if (location.pathname === '/api-testing') {
+    return <ApiTestingPage />;
+  }
+
   if (location.pathname === '/create') {
     return (
       <>
@@ -2931,7 +3021,7 @@ function App() {
         ======================================== */}
         {activeView === 'calendar' && (
         <div className="app-grid flex-1 relative">
-          {/* LEFT SIDEBAR: Custom Event Templates */}
+          {/* LEFT SIDEBAR: Types + Events */}
           <aside className="sidebar relative flex flex-col h-full bg-gray-100 overflow-hidden">
             <LeftPaneHeader
               onOpenCreateEvent={handleCreateTemplate}
@@ -2940,42 +3030,7 @@ function App() {
 
             {/* Scrollable events list area */}
             <div className="flex-1 overflow-y-auto">
-              <div className="p-6">
-                {!typesLoaded ? (
-                  <div className="bg-white rounded-lg shadow p-6 text-center text-gray-500">
-                    <p className="mb-4">Loading types...</p>
-                  </div>
-                ) : taskTemplates.length === 0 ? (
-                <div className="bg-white rounded-lg shadow p-6 text-center text-gray-500">
-                  <p className="mb-4">No event templates yet!</p>
-                  <p className="text-sm">Click the <strong className="text-blue-600">+</strong> button above to create your first event template.</p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {taskTemplates.map((task) => (
-                    <DraggableTaskBlock 
-                      key={task.id} 
-                      task={task} 
-                      onEdit={handleEditTemplate}
-                      onDelete={handleDeleteTemplate}
-                      types={types}
-                    />
-                  ))}
-                </div>
-              )}
-          
-              {/* Instructions */}
-              <div className="mt-8 p-4 bg-white rounded-lg shadow text-sm text-gray-600">
-                <p className="font-semibold mb-2">How to use:</p>
-                <ul className="list-disc list-inside space-y-1">
-                  <li>Click <strong>Types</strong> to manage event categories</li>
-                  <li>Click <strong>+</strong> to create event templates</li>
-                  <li>Click template to edit, trash icon to delete</li>
-                  <li>Drag templates to schedule on calendar</li>
-                  <li>Ctrl+Scroll to zoom calendar</li>
-                </ul>
-              </div>
-              </div>
+              <SidebarEvents />
             </div>
 
             {/* Resize Handle */}

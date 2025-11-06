@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import SubNav from '../components/Create/SubNav';
 import ProjectsView from '../components/Create/ProjectsView';
 import RecurringSchedulesView from '../components/Create/RecurringSchedulesView';
+import { useCreatePageStore } from '../store/createPageStore';
 
 // Helper functions for generating IDs
 const generateProjectId = () => `project-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -10,142 +11,77 @@ const generateSubtaskId = () => `subtask-${Date.now()}-${Math.random().toString(
 
 export default function CreatePage() {
   const [activeTab, setActiveTab] = useState('projects');
-  const [projects, setProjects] = useState([]);
+  const { types, tasksByType, subtasksByTask, loading, init, addType, updateType, removeType, addTask, updateTask, removeTask, loadSubtasks, addSubtask, updateSubtask, removeSubtask } = useCreatePageStore();
+  const [openTasks, setOpenTasks] = useState({});
+
+  useEffect(() => {
+    init();
+  }, [init]);
+
+  // Map backend types/tasks/subtasks to ProjectsView model
+  const projects = useMemo(() => {
+    return (types || []).map((t) => {
+      const tasks = (tasksByType[t.id] || []).map((task) => ({
+        id: task.id,
+        title: task.title,
+        isSubtasksOpen: !!openTasks[task.id],
+        subtasks: (subtasksByTask[task.id] || []).map((s) => ({ id: s.id, title: s.title }))
+      }));
+      return {
+        id: t.id,
+        title: t.name,
+        color: t.color || '#7c3aed',
+        tasks
+      };
+    });
+  }, [types, tasksByType, subtasksByTask, openTasks]);
 
   // Project handlers
-  const handleAddProject = ({ title, color }) => {
-    const newProject = {
-      id: generateProjectId(),
-      title: title || 'Untitled Project',
-      color: color || '#7c3aed',
-      tasks: []
-    };
-    setProjects([...projects, newProject]);
+  const handleAddProject = async ({ title, color }) => {
+    await addType({ name: title || 'Untitled', color });
   };
 
-  const handleTitleChange = (projectId, newTitle) => {
-    setProjects(projects.map(p =>
-      p.id === projectId ? { ...p, title: newTitle } : p
-    ));
+  const handleTitleChange = async (projectId, newTitle) => {
+    await updateType(projectId, { name: newTitle });
   };
 
-  const handleColorChange = (projectId, newColor) => {
-    setProjects(projects.map(p =>
-      p.id === projectId ? { ...p, color: newColor } : p
-    ));
+  const handleColorChange = async (projectId, newColor) => {
+    await updateType(projectId, { color: newColor });
   };
 
   // Task handlers
-  const handleAddTask = (projectId) => {
-    const newTask = {
-      id: generateTaskId(),
-      title: 'New Task',
-      subtasks: [],
-      isSubtasksOpen: false
-    };
-    setProjects(projects.map(p =>
-      p.id === projectId
-        ? { ...p, tasks: [...(p.tasks || []), newTask] }
-        : p
-    ));
+  const handleAddTask = async (projectId) => {
+    await addTask({ type_id: projectId, title: 'New Task' });
   };
 
-  const handleTaskTitleChange = (projectId, taskId, newTitle) => {
-    setProjects(projects.map(p =>
-      p.id === projectId
-        ? {
-            ...p,
-            tasks: (p.tasks || []).map(t =>
-              t.id === taskId ? { ...t, title: newTitle } : t
-            )
-          }
-        : p
-    ));
+  const handleTaskTitleChange = async (_projectId, taskId, newTitle) => {
+    await updateTask(taskId, { title: newTitle });
   };
 
-  const handleRemoveTask = (projectId, taskId) => {
-    setProjects(projects.map(p =>
-      p.id === projectId
-        ? { ...p, tasks: (p.tasks || []).filter(t => t.id !== taskId) }
-        : p
-    ));
+  const handleRemoveTask = async (_projectId, taskId) => {
+    await removeTask(taskId);
   };
 
   // Subtask handlers
-  const handleToggleSubtasks = (projectId, taskId) => {
-    setProjects(projects.map(p =>
-      p.id === projectId
-        ? {
-            ...p,
-            tasks: (p.tasks || []).map(t =>
-              t.id === taskId
-                ? { ...t, isSubtasksOpen: !t.isSubtasksOpen, subtasks: t.subtasks || [] }
-                : t
-            )
-          }
-        : p
-    ));
+  const handleToggleSubtasks = async (_projectId, taskId) => {
+    setOpenTasks((m) => ({ ...m, [taskId]: !m[taskId] }));
+    // Lazy-load subtasks when opening
+    if (!openTasks[taskId]) {
+      await loadSubtasks(taskId);
+    }
   };
 
-  const handleAddSubtask = (projectId, taskId) => {
-    const newSubtask = {
-      id: generateSubtaskId(),
-      title: 'New subtask'
-    };
-    setProjects(projects.map(p =>
-      p.id === projectId
-        ? {
-            ...p,
-            tasks: (p.tasks || []).map(t =>
-              t.id === taskId
-                ? {
-                    ...t,
-                    subtasks: [...(t.subtasks || []), newSubtask],
-                    isSubtasksOpen: true
-                  }
-                : t
-            )
-          }
-        : p
-    ));
+  const handleAddSubtask = async (_projectId, taskId) => {
+    await addSubtask(taskId, 'New subtask');
+    setOpenTasks((m) => ({ ...m, [taskId]: true }));
   };
 
-  const handleUpdateSubtaskTitle = (projectId, taskId, subtaskId, newTitle) => {
-    setProjects(projects.map(p =>
-      p.id === projectId
-        ? {
-            ...p,
-            tasks: (p.tasks || []).map(t =>
-              t.id === taskId
-                ? {
-                    ...t,
-                    subtasks: (t.subtasks || []).map(s =>
-                      s.id === subtaskId ? { ...s, title: newTitle } : s
-                    )
-                  }
-                : t
-            )
-          }
-        : p
-    ));
+  const handleUpdateSubtaskTitle = async (_projectId, _taskId, subtaskId, newTitle) => {
+    await updateSubtask(subtaskId, { title: newTitle });
   };
 
-  const handleRemoveSubtask = (projectId, taskId, subtaskId) => {
-    setProjects(projects.map(p =>
-      p.id === projectId
-        ? {
-            ...p,
-            tasks: (p.tasks || []).map(t =>
-              t.id === taskId
-                ? {
-                    ...t,
-                    subtasks: (t.subtasks || []).filter(s => s.id !== subtaskId)
-                  }
-                : t
-            )
-          }
-        : p
-    ));
+  const handleRemoveSubtask = async (_projectId, _taskId, subtaskId) => {
+    await removeSubtask(subtaskId);
   };
 
   const handleSubTaskClick = (projectId, taskId) => {
@@ -162,9 +98,7 @@ export default function CreatePage() {
     console.log('Clock clicked for project:', projectId, 'task:', taskId);
   };
 
-  const handleProjectChange = (updatedProject) => {
-    setProjects(projects.map(p => p.id === updatedProject.id ? updatedProject : p));
-  };
+  const handleProjectChange = async (_updatedProject) => {};
 
   return (
     <div data-testid="create-page-root" className="flex flex-col h-full bg-gray-50 pt-[57px]">

@@ -39,8 +39,8 @@ public class EventTypeController {
         return ResponseEntity.status(HttpStatus.CREATED).body(saved);
     }
 
-    @PutMapping("/types/{id}")
-    public ResponseEntity<EventType> updateType(@PathVariable String id, @RequestBody EventType type) {
+    @PutMapping("/workspaces/{workspaceId}/types/{id}")
+    public ResponseEntity<EventType> updateType(@PathVariable String workspaceId, @PathVariable String id, @RequestBody EventType type) {
         EventType existing = typeRepo.findById(id).orElse(null);
         if (existing == null) {
             return ResponseEntity.notFound().build();
@@ -59,8 +59,8 @@ public class EventTypeController {
         return ResponseEntity.ok(updated);
     }
 
-    @DeleteMapping("/types/{id}")
-    public ResponseEntity<Void> deleteType(@PathVariable String id) {
+    @DeleteMapping("/workspaces/{workspaceId}/types/{id}")
+    public ResponseEntity<Void> deleteType(@PathVariable String workspaceId, @PathVariable String id) {
         if (!typeRepo.existsById(id)) {
             return ResponseEntity.notFound().build();
         }

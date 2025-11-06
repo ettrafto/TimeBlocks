@@ -129,22 +129,22 @@ export function createEventsStoreWithBackend(initial = []) {
         TBLog.warn('Suspicious events detected', diagnosis.suspicious);
       }
 
+      // Clean events; do NOT filter legitimate titles on production
+      const cleanedEvents = cleanEvents(frontendEvents);
+      const filtered = cleanedEvents;
+
       // Clear existing and load only valid events from backend
       byId.clear();
       byDate.clear();
 
-      const cleanedEvents = cleanEvents(frontendEvents);
-      cleanedEvents.forEach((fe) => {
+      filtered.forEach((fe) => {
         byId.set(fe.id, fe);
         link(fe.dateKey, fe.id);
       });
 
       isInitialized = true;
       notify();
-      TBLog.kv("Store state (post-init)", { 
-        totalEvents: cleanedEvents.length,
-        filteredOut: diagnosis.suspiciousCount 
-      });
+      TBLog.kv("Store state (post-init)", { totalEvents: filtered.length, suspiciousCount: diagnosis.suspiciousCount });
     } catch (error) {
       TBLog.error('Failed to load events from backend', error);
       // Keep UI stable with empty events array instead of crashing

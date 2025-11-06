@@ -11,14 +11,33 @@ export function createUiStore() {
   let dragOverNamespace = null;
   let activeResize = null;
 
+  // Collapsed type headers: typeId -> boolean
+  let collapsedByType = {};
+
+  // Ordered list of type ids for sidebar headers
+  let typeOrder = [];
+
+  // Per-type ordered list of event (task) ids
+  let eventOrderByType = {};
+
+  // Hydrate from localStorage (best-effort)
+  try {
+    const savedCollapsed = localStorage.getItem('ui.collapsedByType');
+    const savedTypeOrder = localStorage.getItem('ui.typeOrder');
+    const savedEventOrder = localStorage.getItem('ui.eventOrderByType');
+    if (savedCollapsed) collapsedByType = JSON.parse(savedCollapsed);
+    if (savedTypeOrder) typeOrder = JSON.parse(savedTypeOrder);
+    if (savedEventOrder) eventOrderByType = JSON.parse(savedEventOrder);
+  } catch {}
+
   // Cache state to prevent infinite loops
-  let cachedState = { dragOverNamespace, activeResize };
+  let cachedState = { dragOverNamespace, activeResize, collapsedByType, typeOrder, eventOrderByType };
 
   const subs = new Set();
   const get = () => cachedState;
   const subscribe = (fn) => { subs.add(fn); return () => subs.delete(fn); };
   const notify = () => {
-    cachedState = { dragOverNamespace, activeResize };
+    cachedState = { dragOverNamespace, activeResize, collapsedByType, typeOrder, eventOrderByType };
     subs.forEach((fn) => fn(cachedState));
   };
 
@@ -48,6 +67,39 @@ export function createUiStore() {
     notify(); 
   };
 
+  const toggleCollapsed = (typeId) => {
+    const key = String(typeId);
+    collapsedByType = { ...collapsedByType, [key]: !collapsedByType[key] };
+    try { localStorage.setItem('ui.collapsedByType', JSON.stringify(collapsedByType)); } catch {}
+    notify();
+  };
+
+  const setCollapsed = (typeId, value) => {
+    const key = String(typeId);
+    collapsedByType = { ...collapsedByType, [key]: !!value };
+    try { localStorage.setItem('ui.collapsedByType', JSON.stringify(collapsedByType)); } catch {}
+    notify();
+  };
+
+  const setTypeOrder = (order) => {
+    typeOrder = Array.isArray(order) ? order.map(String) : [];
+    try { localStorage.setItem('ui.typeOrder', JSON.stringify(typeOrder)); } catch {}
+    notify();
+  };
+
+  const initTypeOrderIfEmpty = (ids) => {
+    if (!typeOrder || typeOrder.length === 0) {
+      setTypeOrder((ids || []).map(String));
+    }
+  };
+
+  const setEventOrderForType = (typeId, order) => {
+    const key = String(typeId);
+    eventOrderByType = { ...eventOrderByType, [key]: (order || []).map(String) };
+    try { localStorage.setItem('ui.eventOrderByType', JSON.stringify(eventOrderByType)); } catch {}
+    notify();
+  };
+
   return {
     get, 
     subscribe,
@@ -56,6 +108,13 @@ export function createUiStore() {
     beginResize, 
     updateResizeDraft, 
     endResize,
+    toggleCollapsed,
+    setCollapsed,
+    typeOrder,
+    setTypeOrder,
+    initTypeOrderIfEmpty,
+    eventOrderByType,
+    setEventOrderForType,
   };
 }
 

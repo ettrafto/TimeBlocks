@@ -69,19 +69,18 @@ export async function apiRequest(path, { method = "GET", body, headers = {}, cor
 // ========================================
 
 export const eventTypesApi = {
-  // Get all types for workspace
-  getAll: (workspaceId = WORKSPACE_ID) => apiRequest(`/api/workspaces/${workspaceId}/types`),
+  // Get all types (workspace ignored; backend uses single set)
+  getAll: () => apiRequest(`/api/types`),
 
   // Create a new type
-  // Accept body first for ergonomics; workspaceId optional second param
-  create: (type, workspaceId = WORKSPACE_ID) => apiRequest(`/api/workspaces/${workspaceId}/types`, {
+  create: (type) => apiRequest(`/api/types`, {
     method: 'POST',
     body: type,
   }),
 
-  // Update a type
+  // Update a type (PATCH aligns with backend controller)
   update: (id, type) => apiRequest(`/api/types/${id}`, {
-    method: 'PUT',
+    method: 'PATCH',
     body: type,
   }),
 
@@ -123,25 +122,47 @@ export const libraryEventsApi = {
 // ========================================
 
 export const scheduledEventsApi = {
-  // Get scheduled events for calendar and date range
-  getForRange: (from, to, calendarId = CALENDAR_ID) => {
-    return apiRequest(`/api/calendars/${calendarId}/scheduled-events?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+  // Get occurrences for calendar/date range, map to Event-like shape expected by store
+  getForRange: async (from, to, calendarId = CALENDAR_ID) => {
+    const occs = await apiRequest(`/api/calendars/${encodeURIComponent(calendarId)}/events?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+    // Map occurrences -> event rows the store expects (id/title/startUtc/endUtc/typeId)
+    return Array.isArray(occs) ? occs.map(o => ({
+      id: o.event_id,
+      title: o.title,
+      startUtc: o.start,
+      endUtc: o.end,
+      typeId: o.type_id ?? null,
+      libraryEventId: null,
+    })) : [];
   },
 
-  // Create a new scheduled event
-  create: (event, calendarId = CALENDAR_ID) => apiRequest(`/api/calendars/${calendarId}/scheduled-events`, {
+  // Create an event (translate to backend payload)
+  create: (event) => apiRequest(`/api/events`, {
     method: 'POST',
-    body: event,
+    body: {
+      calendar_id: event.calendarId || CALENDAR_ID,
+      title: event.title,
+      start: event.startUtc,
+      end: event.endUtc,
+      type_id: event.typeId ?? null,
+      color: event.color ?? null,
+    },
   }),
 
-  // Update a scheduled event
-  update: (id, event) => apiRequest(`/api/scheduled-events/${id}`, {
-    method: 'PUT',
-    body: event,
+  // Update an event by id (partial)
+  update: (id, event) => apiRequest(`/api/events/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: {
+      title: event.title,
+      start: event.startUtc,
+      end: event.endUtc,
+      type_id: event.typeId ?? null,
+      color: event.color ?? null,
+    },
   }),
 
-  // Delete a scheduled event
-  delete: (id) => apiRequest(`/api/scheduled-events/${id}`, {
+  // Delete an event by id
+  delete: (id) => apiRequest(`/api/events/${encodeURIComponent(id)}`, {
     method: 'DELETE',
   }),
 };
@@ -168,12 +189,12 @@ export const healthApi = {
 // Unified API object
 export const api = {
   health: () => healthApi.check(),
-  getTypes: (workspaceId = WORKSPACE_ID) => eventTypesApi.getAll(workspaceId),
-  createType: (workspaceId = WORKSPACE_ID, data) => eventTypesApi.create(workspaceId, data),
+  getTypes: () => eventTypesApi.getAll(),
+  createType: (data) => eventTypesApi.create(data),
   updateType: (id, data) => eventTypesApi.update(id, data),
   deleteType: (id) => eventTypesApi.delete(id),
   getScheduledEvents: (calendarId = CALENDAR_ID, { from, to }) => scheduledEventsApi.getForRange(from, to, calendarId),
-  createScheduledEvent: (calendarId = CALENDAR_ID, data) => scheduledEventsApi.create(data, calendarId),
+  createScheduledEvent: (calendarId = CALENDAR_ID, data) => scheduledEventsApi.create({ ...data, calendarId }),
   updateScheduledEvent: (id, data) => scheduledEventsApi.update(id, data),
   deleteScheduledEvent: (id) => scheduledEventsApi.delete(id),
 };

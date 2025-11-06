@@ -18,3 +18,5 @@ public interface TaskRepository extends JpaRepository<Task, Integer> {
     List<Task> findByTypeIdFlexible(@Param("typeId") Integer typeId, @Param("type_id") Integer type_id);
 }
 
+
+

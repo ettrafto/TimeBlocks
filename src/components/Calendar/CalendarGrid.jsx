@@ -7,6 +7,9 @@ import ScheduledItem from './ScheduledItem';
 import ScheduledItemPreview from './ScheduledItemPreview';
 import GhostEvent from './GhostEvent';
 import { uiStore } from '../../state/uiStore';
+import { useSyncExternalStore } from 'react';
+import { useCreatePageStore } from '../../store/createPageStore';
+import TypeGroup from '../calendar/TypeGroup';
 
 // Hook to consume UI store
 function useUi() {
@@ -76,6 +79,25 @@ export default function CalendarGrid({
     const result = computeEventLayout(scheduledItems);
     console.log('📊 Layout result:', result);
     return result;
+  }, [scheduledItems]);
+
+  // Build type map from Create page store
+  const cps = useCreatePageStore?.getState ? useCreatePageStore() : { types: [] };
+  const typesById = React.useMemo(() => {
+    const m = {};
+    (cps.types || []).forEach(t => { m[String(t.id)] = t; });
+    return m;
+  }, [cps.types]);
+
+  // Group scheduled items by typeId
+  const groups = React.useMemo(() => {
+    const byType = new Map();
+    for (const it of scheduledItems) {
+      const key = String(it.typeId ?? 'untyped');
+      if (!byType.has(key)) byType.set(key, []);
+      byType.get(key).push(it);
+    }
+    return byType;
   }, [scheduledItems]);
   
   // Optional: Enable to see debug labels on events
@@ -186,6 +208,19 @@ export default function CalendarGrid({
         // Zoom handling continues in handleWheel callback
       }}
     >
+      {/* Type headers (grouped) */}
+      {Array.from(groups.entries()).map(([typeKey, items]) => {
+        const earliestStart = items.reduce((min, it) => Math.min(min, it.startMinutes || 0), Number.POSITIVE_INFINITY);
+        const topPx = minutesToPixels(earliestStart === Number.POSITIVE_INFINITY ? 0 : earliestStart, pixelsPerSlot);
+        const collapsedMap = ui.subscribe ? ui : { collapsedByType: {} };
+        const collapsed = (!!collapsedMap.collapsedByType?.[typeKey]);
+        const toggle = () => uiStore.toggleCollapsed(String(typeKey));
+        const typeEntity = typesById[typeKey] || { id: typeKey, name: String(typeKey), color: '#999' };
+        return (
+          <TypeGroup key={`group-${typeKey}`} typeEntity={typeEntity} tasks={items} collapsed={collapsed} onToggle={toggle} topPx={topPx} />
+        );
+      })}
+
       {/* Time labels and grid lines */}
       {timeSlots.map((slot, index) => {
         const topPosition = minutesToPixels(slot.minutes, pixelsPerSlot);
@@ -251,9 +286,9 @@ export default function CalendarGrid({
         </div>
       )}
 
-      {/* Ghost/shadow preview - shows where dragged item will land */}
-      {/* Only render ghost in the grid that's currently hovered */}
-      {isHoveringThisGrid && ghostPosition && (
+      {/* Ghost/shadow preview - render when hovered OR ghost targets this day */}
+      {(isHoveringThisGrid || (ghostPosition && ghostPosition.dayKey === dayKey)) && ghostPosition && (
+        console.log('👻 Render GhostEvent', { dayKey, hover: isHoveringThisGrid, ghost: ghostPosition }),
         <GhostEvent 
           ghostPosition={ghostPosition} 
           pixelsPerSlot={pixelsPerSlot}

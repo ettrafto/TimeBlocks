@@ -1,5 +1,6 @@
 package com.timeblocks.model;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import jakarta.persistence.*;
 
 @Entity
@@ -10,6 +11,7 @@ public class Subtask {
     private Integer id;
     
     @Column(name = "task_id", nullable = false)
+    @JsonAlias({"task_id", "taskId"})
     private Integer taskId;
     
     @Column(nullable = false)
@@ -70,4 +72,5 @@ public class Subtask {
         this.orderIndex = orderIndex;
     }
 }
+
 

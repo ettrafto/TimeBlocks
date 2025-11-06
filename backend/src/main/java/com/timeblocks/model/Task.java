@@ -1,5 +1,6 @@
 package com.timeblocks.model;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
@@ -11,6 +12,7 @@ public class Task {
     private Integer id;
     
     @Column(name = "type_id", nullable = false)
+    @JsonAlias({"type_id", "typeId"})
     private Integer typeId;
     
     @Column(nullable = false)
@@ -78,4 +80,5 @@ public class Task {
         this.createdAt = createdAt;
     }
 }
+
 
