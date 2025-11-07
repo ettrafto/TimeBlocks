@@ -1312,6 +1312,7 @@ function CalendarGrid({
   dayKey,
   idNamespace,
   onDrop,
+  onDelete,
 }) {
   const timeSlots = generateTimeSlots();
   // Round to integer pixels to prevent sub-pixel jiggle
@@ -1495,31 +1496,7 @@ function CalendarGrid({
               layoutStyle={itemLayout}
               showDebug={showDebugLabels}
               types={types}
-              onDelete={(it) => {
-                try { console.info('🗑️ Unschedule request', { id: it.id, dateKey: it.dateKey }); } catch {}
-                const idStr = String(it.id);
-                if (idStr.startsWith('sched:')) {
-                  try {
-                    const occId = idStr.slice(6);
-                    const scheduleId = occId.split(':')[0];
-                    scheduleClient.deleteSchedule(scheduleId).then(async () => {
-                      // reload visible range
-                      if (dayKey) {
-                        const [y,m,d] = dayKey.split('-').map(n => parseInt(n,10));
-                        const from = new Date(y, m-1, d, 0, 0, 0, 0).getTime();
-                        const to   = new Date(y, m-1, d, 23, 59, 59, 999).getTime();
-                        await useScheduleStore.getState().loadRange({ timeMin: from, timeMax: to, force: true });
-                      }
-                    });
-                  } catch (e) { console.warn('⚠️ Unschedule failed', e); }
-                } else {
-                  try { useEventsStore().removeEvent?.(it.id); } catch {}
-                  // Also update local list immediately
-                  try {
-                    setScheduledItems((prev) => prev.filter((x) => x.id !== it.id));
-                  } catch {}
-                }
-              }}
+              onDelete={(it) => onDelete?.(it)}
             />
           );
         })
@@ -1942,7 +1919,7 @@ function App() {
   // EVENTS STORE
   // ========================================
   
-  const { byId, byDate, getEventsForDate, moveEventToDay, updateEventTime, upsertEvent, findConflictsSameDay } = useEventsStore();
+  const { byId, byDate, getEventsForDate, moveEventToDay, updateEventTime, upsertEvent, findConflictsSameDay, removeEvent } = useEventsStore();
   
   // ========================================
   // STATE INITIALIZATION WITH DEMO DATA
@@ -2377,6 +2354,13 @@ function App() {
               : schedItem
           )
         );
+        try {
+          const sm = pendingEvent.startMinutes;
+          const dur = pendingEvent.duration || 30;
+          Promise.resolve(updateEventTime(pendingEvent.id, sm, dur))
+            .then(() => console.info('✅ updateEventTime (confirm overlap) queued'))
+            .catch((e) => console.warn('⚠️ updateEventTime (confirm overlap) failed', e));
+        } catch (e) { console.warn('⚠️ Persist confirm overlap threw', e); }
       } else {
         // Adding new event
         console.log('  → Adding new event');
@@ -2525,6 +2509,12 @@ function App() {
       setScheduledItems(prev =>
         prev.map(it => it.id === updated.id ? updated : it)
       );
+      try {
+        // Persist time change to backend
+        Promise.resolve(updateEventTime(updated.id, start, duration))
+          .then(() => console.info('✅ updateEventTime (resize) queued'))
+          .catch((e) => console.warn('⚠️ updateEventTime (resize) failed', e));
+      } catch (e) { console.warn('⚠️ Persist resize threw', e); }
     }
 
     // Cleanup
@@ -3402,6 +3392,32 @@ function App() {
                 isResizing: isResizing,
                 conflictUi: conflictUi, // Pass conflict UI state (includes live conflict flag)
                 types: types,
+                onDelete: (it) => {
+                  try { console.info('🗑️ Unschedule/delete request', { id: it.id, dateKey: it.dateKey }); } catch {}
+                  const idStr = String(it.id || '');
+                  if (idStr.startsWith('sched:')) {
+                    try {
+                      const occId = idStr.slice(6);
+                      const scheduleId = occId.split(':')[0];
+                      scheduleClient.deleteSchedule(scheduleId).then(async () => {
+                        // reload visible range for the affected day
+                        const dkey = it.dateKey || null;
+                        if (dkey) {
+                          const [y,m,d] = dkey.split('-').map(n => parseInt(n,10));
+                          const from = new Date(y, m-1, d, 0, 0, 0, 0).getTime();
+                          const to   = new Date(y, m-1, d, 23, 59, 59, 999).getTime();
+                          await useScheduleStore.getState().loadRange({ timeMin: from, timeMax: to, force: true });
+                        } else {
+                          // fallback: trigger a store reload
+                          await useScheduleStore.getState().loadRange({ force: true });
+                        }
+                      });
+                    } catch (e) { console.warn('⚠️ Unschedule failed', e); }
+                  } else {
+                    try { removeEvent?.(it.id); } catch (e) { console.warn('⚠️ removeEvent failed', e); }
+                    try { setScheduledItems(prev => prev.filter(x => x.id !== it.id)); } catch {}
+                  }
+                },
               }}
               getEventsForDay={(dayKey) => {
                 // Merge new schedule occurrences mapped to calendar items

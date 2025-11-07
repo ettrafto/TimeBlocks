@@ -18,6 +18,7 @@ export default function ScheduledItem({
   isConflicting = false,
   layoutStyle = { leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 },
   showDebug = false,
+  onDelete,
 }) {
   // PHASE 1 DIAGNOSTIC: Track this render
   trackScheduledItemRender(item.id);
@@ -144,6 +145,18 @@ export default function ScheduledItem({
       data-allow-drag={allowDrag}
       data-conflicting={isConflicting}
     >
+      {onDelete && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(item);
+          }}
+          className="absolute top-1 right-1 text-xs bg-black/20 hover:bg-black/40 text-white rounded px-1"
+          title="Delete"
+        >
+          ×
+        </button>
+      )}
       {/* Optional debug label showing column/overlap info */}
       {showDebug && (
         <div className="absolute top-0 right-0 text-[10px] bg-black/40 px-1 rounded-bl pointer-events-none">

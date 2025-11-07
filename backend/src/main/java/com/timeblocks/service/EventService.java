@@ -85,8 +85,19 @@ public class EventService {
 
   @Transactional
   public void deleteHard(String id) {
+    log.info("deleteHard(): request to delete event id={}", id);
+    long before = 0L;
+    try { before = repo.count(); } catch (Exception ignored) {}
     repo.deleteById(id);
-    try { occurrences.deleteForEvent(id); } catch (Exception ignore) {}
+    long after = 0L;
+    try { after = repo.count(); } catch (Exception ignored) {}
+    log.info("deleteHard(): deleted event id={}, countBefore={}, countAfter={}", id, before, after);
+    try {
+      occurrences.deleteForEvent(id);
+      log.debug("deleteHard(): occurrences deleted for event id={}", id);
+    } catch (Exception ex) {
+      log.warn("deleteHard(): occurrence cleanup failed for event id={}", id, ex);
+    }
   }
 }
 

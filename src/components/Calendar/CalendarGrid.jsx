@@ -42,6 +42,7 @@ export default function CalendarGrid({
   dayKey,
   idNamespace,
   onDrop,
+  onDelete,
 }) {
   console.log('🔲 CalendarGrid RENDER:', {
     dayKey,
@@ -265,6 +266,7 @@ export default function CalendarGrid({
               isConflicting={false} // Real events don't show conflict (only draft shows visual)
               layoutStyle={itemLayout}
               showDebug={showDebugLabels}
+              onDelete={onDelete}
             />
           );
         })
