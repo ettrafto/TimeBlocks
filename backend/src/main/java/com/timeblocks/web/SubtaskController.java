@@ -3,6 +3,7 @@ package com.timeblocks.web;
 import com.timeblocks.logging.TBLog;
 import com.timeblocks.model.Subtask;
 import com.timeblocks.repo.SubtaskRepository;
+import com.timeblocks.repo.TaskRepository;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -15,9 +16,11 @@ import java.util.Map;
 @RequestMapping("/api")
 public class SubtaskController {
     private final SubtaskRepository subtaskRepo;
+    private final TaskRepository taskRepo;
 
-    public SubtaskController(SubtaskRepository subtaskRepo) {
+    public SubtaskController(SubtaskRepository subtaskRepo, TaskRepository taskRepo) {
         this.subtaskRepo = subtaskRepo;
+        this.taskRepo = taskRepo;
     }
 
     @GetMapping("/subtasks")
@@ -60,8 +63,25 @@ public class SubtaskController {
             Map<String, Object> payload = new HashMap<>();
             payload.put("task_id", subtask.getTaskId());
             payload.put("title", subtask.getTitle());
+            payload.put("done", subtask.getDone());
+            payload.put("orderIndex", subtask.getOrderIndex());
             TBLog.kv("Payload", payload);
             
+            // Validate input early with explicit logging
+            if (subtask.getTaskId() == null) {
+                TBLog.warn("Validation failed: task_id is null");
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
+            }
+            if (subtask.getTitle() == null || subtask.getTitle().trim().isEmpty()) {
+                TBLog.warn("Validation failed: title is blank");
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
+            }
+            // Ensure parent task exists to avoid FK 500
+            if (!taskRepo.existsById(subtask.getTaskId())) {
+                TBLog.warn("Validation failed: parent task not found: {}", subtask.getTaskId());
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
+            }
+
             Subtask saved = subtaskRepo.save(subtask);
             
             Map<String, Object> dbResult = new HashMap<>();
@@ -73,7 +93,7 @@ public class SubtaskController {
             
             return ResponseEntity.status(HttpStatus.CREATED).body(saved);
         } catch (Exception e) {
-            TBLog.error("Handler error", e);
+            TBLog.error("Handler error (createSubtask)", e);
             throw e;
         } finally {
             TBLog.groupEnd();

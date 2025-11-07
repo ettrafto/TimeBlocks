@@ -20,6 +20,9 @@ spring:
     locations: classpath:db/migration/common,classpath:db/migration/sqlite,classpath:db/migration/seed
     baseline-on-migrate: true
     mixed: true
+    placeholders:
+      seed_default_types: "0"
+    ignore-missing-migrations: true
 
 server:
   port: 8080

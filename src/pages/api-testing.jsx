@@ -1,371 +1,325 @@
-import React, { useEffect, useState } from "react";
-import { apiRequest } from "../services/api.js";
+import React, { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useTypesStore, useTypesOrdered } from "../state/typesStore.js";
+import { useTasksStore } from "../state/tasksStore.js";
+import { eventsStore } from "../state/eventsStoreWithBackend.js";
+import DebugNav from "../debug/components/DebugNav";
+import log from "../lib/logger";
 
 export default function ApiTestingPage() {
-  const [endpoint, setEndpoint] = useState("/api/test");
-  const [method, setMethod] = useState("GET");
-  const [body, setBody] = useState("");
-  const [response, setResponse] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const { items: types, loading: typesLoading, error: typesError, loadAll: loadTypes, create: createType, update: updateType, remove: removeType, counts: typeCounts } = useTypesStore();
+  const orderedTypes = useTypesOrdered();
+  const { loadAll: loadTasks, tasks, tasksForType, byTypeId, subtasksForTask, createTask, updateTask, removeTask, addSubtask, updateSubtask, removeSubtask, loading: tasksLoading, error: tasksError } = useTasksStore();
 
-  const nowIso = new Date().toISOString();
-  const inOneHour = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-  const inOneWeek = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  // wire events store via subscription
+  const eventsSnapshot = useSyncExternalStore(eventsStore.subscribe, eventsStore.get);
+  const eventsStatus = eventsStore.getStatus ? eventsStore.getStatus() : { loading: false, error: null };
+  const allEvents = useMemo(() => Array.from(eventsSnapshot.byId?.values?.() || []), [eventsSnapshot]);
 
-  const samples = [
-    { group: "Health", items: [
-      { label: "GET /api/health", method: "GET", path: "/api/health" },
-      { label: "POST /api/debug/selfcheck", method: "POST", path: "/api/debug/selfcheck" },
-    ]},
-    { group: "Types", items: [
-      { label: "GET /api/types", method: "GET", path: "/api/types" },
-      { label: "POST /api/types", method: "POST", path: "/api/types", body: { name: "Work", color: "#2563eb" } },
-      { label: "PATCH /api/types/{id}", method: "PATCH", path: "/api/types/1", body: { name: "Work+", color: "#1d4ed8" } },
-      { label: "DELETE /api/types/{id}", method: "DELETE", path: "/api/types/1" },
-    ]},
-    { group: "Tasks", items: [
-      { label: "GET /api/tasks?typeId=1", method: "GET", path: "/api/tasks?typeId=1" },
-      { label: "POST /api/tasks", method: "POST", path: "/api/tasks", body: { type_id: 1, title: "Sample Task", description: "demo" } },
-      { label: "PATCH /api/tasks/{id}", method: "PATCH", path: "/api/tasks/1", body: { title: "Renamed Task" } },
-      { label: "DELETE /api/tasks/{id}", method: "DELETE", path: "/api/tasks/1" },
-    ]},
-    { group: "Subtasks", items: [
-      { label: "GET /api/subtasks?taskId=1", method: "GET", path: "/api/subtasks?taskId=1" },
-      { label: "POST /api/subtasks", method: "POST", path: "/api/subtasks", body: { task_id: 1, title: "First sub" } },
-      { label: "PATCH /api/subtasks/{id}", method: "PATCH", path: "/api/subtasks/1", body: { title: "Renamed sub", done: true } },
-      { label: "DELETE /api/subtasks/{id}", method: "DELETE", path: "/api/subtasks/1" },
-    ]},
-    { group: "Calendar Window", items: [
-      { label: "GET /api/calendars/cal_main/events?from..&to..", method: "GET", path: `/api/calendars/cal_main/events?from=${encodeURIComponent(nowIso)}&to=${encodeURIComponent(inOneWeek)}` },
-    ]},
-    { group: "Events CRUD", items: [
-      { label: "POST /api/events", method: "POST", path: "/api/events", body: { calendar_id: "cal_main", title: "Demo Event", start: nowIso, end: inOneHour, type_id: "type-work", color: "#2563eb" } },
-      { label: "PATCH /api/events/{id}", method: "PATCH", path: "/api/events/{eventId}", body: { title: "Updated Title" } },
-      { label: "DELETE /api/events/{id}", method: "DELETE", path: "/api/events/{eventId}" },
-    ]},
-    { group: "Legacy (if used)", items: [
-      { label: "GET /api/calendars/cal_main/scheduled-events?from..&to..", method: "GET", path: `/api/calendars/cal_main/scheduled-events?from=${encodeURIComponent(nowIso)}&to=${encodeURIComponent(inOneWeek)}` },
-      { label: "POST /api/calendars/cal_main/scheduled-events", method: "POST", path: "/api/calendars/cal_main/scheduled-events", body: { title: "Legacy", start: nowIso, end: inOneHour } },
-    ]},
-  ];
-
-  const quickSet = (item, autoSend = true) => {
-    setEndpoint(item.path);
-    setMethod(item.method);
-    setBody(item.body ? JSON.stringify(item.body, null, 2) : "");
-    if (autoSend) {
-      // slight delay to ensure state updates rendered before sending
-      setTimeout(() => sendRequest(), 0);
-    }
-  };
-
-  // Quick testers via centralized API client (uses VITE_API_BASE)
-  const [quickLoading, setQuickLoading] = useState(false);
-  const [quickError, setQuickError] = useState(null);
-  const [quickResult, setQuickResult] = useState(null);
-
-  const runQuick = async (item) => {
-    setQuickLoading(true);
-    setQuickError(null);
-    setQuickResult(null);
-    try {
-      const data = await apiRequest(item.path, { method: item.method, body: item.body });
-      setQuickResult(data);
-    } catch (e) {
-      setQuickError(e?.message || String(e));
-    } finally {
-      setQuickLoading(false);
-    }
-  };
-
-  // ------------------------------------------
-  // Simple CRUD managers (local lists)
-  // ------------------------------------------
-  const [createdTypes, setCreatedTypes] = useState([]);
-  const [typeForm, setTypeForm] = useState({ name: "", color: "#2563eb" });
-
-  const [createdTasks, setCreatedTasks] = useState([]);
-  const [taskForm, setTaskForm] = useState({ type_id: 1, title: "Sample Task", description: "" });
-
-  const [createdSubs, setCreatedSubs] = useState([]);
-  const [subForm, setSubForm] = useState({ task_id: 1, title: "First sub" });
-
-  const [createdEvents, setCreatedEvents] = useState([]);
-  const [eventForm, setEventForm] = useState({
-    calendar_id: "cal_main",
-    title: "Demo Event",
-    start: nowIso,
-    end: inOneHour,
-    type_id: "type-work",
-    color: "#2563eb",
-  });
-
-  async function apiJson(path, init) {
-    return apiRequest(path, { method: init?.method || "GET", body: init?.body });
-  }
-
-  // Types CRUD
-  const createTypeItem = () => refreshTypesAfter(async () => {
-    const created = await apiJson("/api/types", { method: "POST", body: typeForm });
-    setCreatedTypes((prev) => [created, ...prev]);
-  });
-  const updateTypeItem = (t) => refreshTypesAfter(async () => {
-    const name = prompt("New name", t.name) ?? t.name;
-    const color = prompt("New color (hex)", t.color || "#2563eb") ?? t.color;
-    const updated = await apiJson(`/api/types/${t.id}`, { method: "PATCH", body: { name, color } });
-    setCreatedTypes((prev) => prev.map((x) => (x.id === t.id ? updated : x)));
-  });
-  const deleteTypeItem = (t) => refreshTypesAfter(async () => {
-    await apiJson(`/api/types/${t.id}`, { method: "DELETE" });
-    setCreatedTypes((prev) => prev.filter((x) => x.id !== t.id));
-  });
-
-  // Tasks CRUD
-  const createTaskItem = () => refreshTasksAfter(async () => {
-    const created = await apiJson("/api/tasks", { method: "POST", body: taskForm });
-    setCreatedTasks((prev) => [created, ...prev]);
-  });
-  const updateTaskItem = (t) => refreshTasksAfter(async () => {
-    const title = prompt("New title", t.title) ?? t.title;
-    const updated = await apiJson(`/api/tasks/${t.id}`, { method: "PATCH", body: { title } });
-    setCreatedTasks((prev) => prev.map((x) => (x.id === t.id ? updated : x)));
-  });
-  const deleteTaskItem = (t) => refreshTasksAfter(async () => {
-    await apiJson(`/api/tasks/${t.id}`, { method: "DELETE" });
-    setCreatedTasks((prev) => prev.filter((x) => x.id !== t.id));
-  });
-
-  // Subtasks CRUD
-  const createSubItem = () => refreshSubsAfter(async () => {
-    const created = await apiJson("/api/subtasks", { method: "POST", body: subForm });
-    setCreatedSubs((prev) => [created, ...prev]);
-  });
-  const updateSubItem = (s) => refreshSubsAfter(async () => {
-    const title = prompt("New title", s.title) ?? s.title;
-    const updated = await apiJson(`/api/subtasks/${s.id}`, { method: "PATCH", body: { title } });
-    setCreatedSubs((prev) => prev.map((x) => (x.id === s.id ? updated : x)));
-  });
-  const deleteSubItem = (s) => refreshSubsAfter(async () => {
-    await apiJson(`/api/subtasks/${s.id}`, { method: "DELETE" });
-    setCreatedSubs((prev) => prev.filter((x) => x.id !== s.id));
-  });
-
-  // Events CRUD
-  const createEventItem = () => refreshEventsAfter(async () => {
-    const created = await apiJson("/api/events", { method: "POST", body: eventForm });
-    setCreatedEvents((prev) => [created, ...prev]);
-  });
-  const updateEventItem = (e) => refreshEventsAfter(async () => {
-    const title = prompt("New title", e.title ?? "");
-    const updated = await apiJson(`/api/events/${e.id}`, { method: "PATCH", body: { title } });
-    setCreatedEvents((prev) => prev.map((x) => (x.id === e.id ? updated : x)));
-  });
-  const deleteEventItem = (e) => refreshEventsAfter(async () => {
-    await apiJson(`/api/events/${e.id}`, { method: "DELETE" });
-    setCreatedEvents((prev) => prev.filter((x) => x.id !== e.id));
-  });
-
-  // Existing data loaders and lists
-  const [existingTypes, setExistingTypes] = useState([]);
-  const [existingTasks, setExistingTasks] = useState([]);
-  const [existingSubs, setExistingSubs] = useState([]);
-  const [existingEvents, setExistingEvents] = useState([]);
-
-  const loadTypes = async () => {
-    try { setExistingTypes(await apiJson("/api/types") || []); } catch {}
-  };
-  const loadTasks = async () => {
-    try { setExistingTasks(await apiJson("/api/tasks") || []); } catch {}
-  };
-  const loadAllSubtasks = async () => {
-    try {
-      const tasks = await apiJson("/api/tasks");
-      const subsAgg = [];
-      for (const t of tasks || []) {
-        try { subsAgg.push(...(await apiJson(`/api/subtasks?taskId=${t.id}`) || [])); } catch {}
-      }
-      setExistingSubs(subsAgg);
-    } catch {}
-  };
-  const loadEvents = async () => {
-    try {
-      const list = await apiJson(`/api/calendars/${encodeURIComponent(eventForm.calendar_id)}/events?from=${encodeURIComponent(nowIso)}&to=${encodeURIComponent(inOneWeek)}`);
-      setExistingEvents(list || []);
-    } catch {}
-  };
-
+  // On mount: load all
   useEffect(() => {
-    loadTypes();
-    loadTasks();
-    loadAllSubtasks();
-    loadEvents();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let cancelers = [];
+    const c1 = loadTypes({ force: true });
+    const c2 = loadTasks({ force: true });
+    eventsStore.loadAll({ force: true });
+    if (typeof c1 === 'function') cancelers.push(c1);
+    if (typeof c2 === 'function') cancelers.push(c2);
+    return () => cancelers.forEach(fn => { try { fn(); } catch {} });
   }, []);
 
-  // Refresh lists after CRUD
-  const refreshTypesAfter = async (fn) => { await fn(); await loadTypes(); };
-  const refreshTasksAfter = async (fn) => { await fn(); await loadTasks(); };
-  const refreshSubsAfter = async (fn) => { await fn(); await loadAllSubtasks(); };
-  const refreshEventsAfter = async (fn) => { await fn(); await loadEvents(); };
+  // Forms
+  const [typeForm, setTypeForm] = useState({ name: "", color: "#2563eb" });
+  // parent-aware task form
+  const [taskForm, setTaskForm] = useState({ id: null, type_id: 0, title: "", description: "", duration: "", priority: "", subtasks: [] });
+  const resetTaskForm = () => setTaskForm({ id: null, type_id: 0, title: "", description: "", duration: "", priority: "", subtasks: [] });
+  const [subForm, setSubForm] = useState({ task_id: 0, title: "" });
+  const [subtaskForm, setSubtaskForm] = useState({ id: null, task_id: 0, title: "" });
+  const [eventForm, setEventForm] = useState({ calendar_id: "cal_main", title: "Demo Event", start: new Date().toISOString(), end: new Date(Date.now()+3600000).toISOString(), type_id: null, color: "#2563eb" });
+  const typeSelected = !!taskForm.type_id;
+  const formErrors = {
+    type: !taskForm.type_id,
+    title: !taskForm.title?.trim(),
+  };
 
-  const sendRequest = async () => {
-    setLoading(true);
-    setError(null);
-    setResponse(null);
+  // Actions
+  const onAddType = async () => {
+    await createType({ name: typeForm.name, color: typeForm.color });
+    setTypeForm({ name: "", color: "#2563eb" });
+  };
 
+  const onEditType = async (t) => {
+    const name = prompt("New name", t.name) ?? t.name;
+    const color = prompt("New color (hex)", t.color || "#2563eb") ?? t.color;
+    await updateType(t.id, { name, color });
+  };
+  const onDeleteType = async (t) => { await removeType(t.id); };
+
+  const loadTaskIntoForm = (t) => {
+    setTaskForm({
+      id: t.id,
+      type_id: t.type_id,
+      title: t.title || "",
+      description: t.description || "",
+      duration: t.duration || "",
+      priority: t.priority || "",
+      subtasks: (subtasksForTask(t.id) || []).map(s => ({ id: s.id, title: s.title })),
+    });
+    // Prime subtask form with selected task
+    setSubtaskForm((f) => ({ id: null, task_id: t.id, title: "" }));
+  };
+  const onSubmitTask = async () => {
+    if (formErrors.type || formErrors.title) return;
+    if (taskForm.id == null) {
+      await createTask({ type_id: Number(taskForm.type_id), title: taskForm.title, description: taskForm.description });
+    } else {
+      await updateTask(taskForm.id, { type_id: Number(taskForm.type_id), title: taskForm.title, description: taskForm.description });
+    }
+    resetTaskForm();
+  };
+  const onDeleteTask = async (t) => {
+    if (!confirm("Delete this task?")) return;
+    await removeTask(t.id);
+    if (taskForm.id === t.id) resetTaskForm();
+  };
+
+  const onAddSubtask = async () => {
+    if (!subForm.task_id) return;
+    await addSubtask(Number(subForm.task_id), subForm.title || "Untitled");
+    setSubForm({ task_id: 0, title: "" });
+  };
+  const onEditSubtask = async (s) => {
+    const title = prompt("New title", s.title) ?? s.title;
+    await updateSubtask(s.id, { title });
+  };
+  const onDeleteSubtask = async (s) => { await removeSubtask(s.id); };
+  const loadSubtaskIntoForm = (s) => {
+    setSubtaskForm({ id: s.id, task_id: s.task_id, title: s.title });
+  };
+  const resetSubtaskForm = () => setSubtaskForm({ id: null, task_id: 0, title: "" });
+  const onSubmitSubtask = async () => {
+    const parentId = Number(subtaskForm.task_id || taskForm.id || 0);
+    const title = (subtaskForm.title || "").trim();
+    if (!parentId || !title) {
+      log.warn(["API-Testing","subtasks","submit"], "missing parentId or title", { parentId, title });
+      return;
+    }
     try {
-      const init = {
-        method,
-        headers: { "Content-Type": "application/json" },
-      };
-      if (method !== "GET" && body) init.body = body;
-      const res = await fetch(endpoint, init);
-      const text = await res.text();
-      let data = null;
-      try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
-      if (!res.ok) throw new Error((data && (data.message || data.error)) || res.statusText);
-      setResponse(data);
-    } catch (err) {
-      setError(err?.message || String(err));
-    } finally {
-      setLoading(false);
+      if (subtaskForm.id == null) {
+        log.info(["API-Testing","subtasks","create"], "creating subtask", { parentId, title });
+        await addSubtask(parentId, title);
+        log.info(["API-Testing","subtasks","create"], "created");
+      } else {
+        log.info(["API-Testing","subtasks","update"], "updating subtask", { id: subtaskForm.id, title });
+        await updateSubtask(subtaskForm.id, { title });
+        log.info(["API-Testing","subtasks","update"], "updated");
+      }
+      resetSubtaskForm();
+    } catch (e) {
+      log.error(["API-Testing","subtasks","submit"], "failed", e);
+      alert(`Subtask error: ${e?.message || String(e)}`);
     }
   };
 
   return (
-    <div className="w-full h-screen overflow-y-auto bg-gray-50 p-8">
+    <div className="w-full h-screen overflow-y-auto bg-gray-50">
+      <DebugNav />
+      <div className="p-8">
       <div className="w-full max-w-5xl mx-auto">
-        {/* Managers */}
+        {/* Manage Types */}
         <div className="bg-white border rounded-xl shadow-md p-6 mb-6">
           <h3 className="text-lg font-semibold mb-4">Manage Types</h3>
           <div className="flex gap-2 mb-3">
             <input className="border rounded-md px-3 py-2 text-sm" placeholder="Name" value={typeForm.name} onChange={(e) => setTypeForm({ ...typeForm, name: e.target.value })} />
             <input className="border rounded-md px-3 py-2 text-sm w-36" placeholder="#hex" value={typeForm.color} onChange={(e) => setTypeForm({ ...typeForm, color: e.target.value })} />
-            <button onClick={createTypeItem} className="px-3 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700">Create</button>
+            <button onClick={onAddType} className="px-3 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700">+ Add Type</button>
           </div>
+          {typesLoading && <div className="text-sm text-gray-600">Loading...</div>}
+          {typesError && <div className="text-sm text-red-600">Error: {typesError} <button className="underline" onClick={() => loadTypes({ force: true })}>Retry</button></div>}
+          {!typesLoading && !typesError && (
           <ul className="space-y-2">
-            {createdTypes.map((t) => (
+              {orderedTypes.length === 0 && <li className="text-sm text-gray-600">No Types yet</li>}
+              {orderedTypes.map((t) => (
               <li key={t.id} className="border rounded-md p-3 text-sm flex items-center justify-between">
                 <div>
-                  <div className="font-medium">{t.name} <span className="ml-2 text-gray-500">(id: {t.id}{t.uid ? `, uid: ${t.uid}` : ""})</span></div>
+                    <div className="font-medium">{t.name} <span className="ml-2 text-gray-500">(id: {t.id})</span></div>
                   {t.color && <div className="text-gray-600">color: {t.color}</div>}
                 </div>
-                <div className="flex gap-2">
-                  <button onClick={() => updateTypeItem(t)} className="px-3 py-1 border rounded-md text-xs">Update</button>
-                  <button onClick={() => deleteTypeItem(t)} className="px-3 py-1 border rounded-md text-xs text-red-600">Delete</button>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs text-gray-500">count: {typeCounts()[String(t.id)] ?? 0}</span>
+                    <button onClick={() => onEditType(t)} className="px-3 py-1 border rounded-md text-xs">Edit</button>
+                    <button onClick={() => onDeleteType(t)} className="px-3 py-1 border rounded-md text-xs text-red-600">Delete</button>
                 </div>
               </li>
             ))}
           </ul>
+          )}
         </div>
 
-        <div className="bg-white border rounded-xl shadow-md p-6 mb-6">
-          <h3 className="text-lg font-semibold mb-4">Manage Tasks</h3>
-          <div className="flex gap-2 mb-3">
-            <input className="border rounded-md px-3 py-2 text-sm w-24" type="number" placeholder="type_id" value={taskForm.type_id} onChange={(e) => setTaskForm({ ...taskForm, type_id: Number(e.target.value) })} />
-            <input className="border rounded-md px-3 py-2 text-sm flex-1" placeholder="Title" value={taskForm.title} onChange={(e) => setTaskForm({ ...taskForm, title: e.target.value })} />
-            <input className="border rounded-md px-3 py-2 text-sm flex-1" placeholder="Description" value={taskForm.description} onChange={(e) => setTaskForm({ ...taskForm, description: e.target.value })} />
-            <button onClick={createTaskItem} className="px-3 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700">Create</button>
+        {/* Tasks: Grouped list + Parent-aware form */}
+        <div className="grid md:grid-cols-2 gap-6 mb-6">
+          <div className="bg-white border rounded-xl shadow-md p-6">
+            <h3 className="text-lg font-semibold mb-4">Tasks</h3>
+            {tasksLoading && <div className="text-sm text-gray-600">Loading...</div>}
+            {tasksError && <div className="text-sm text-red-600">Error: {tasksError} <button className="underline" onClick={() => loadTasks({ force: true })}>Retry</button></div>}
+            {!tasksLoading && !tasksError && (
+              <div className="space-y-4">
+                {orderedTypes.map((t) => (
+                  <div key={t.id} className="border rounded-md">
+                    <div className="px-3 py-2 text-sm font-medium bg-gray-50 flex items-center justify-between">
+                      <span>{t.name}</span>
+                      <span className="text-xs text-gray-500">{(tasksForType(t.id) || []).length} tasks</span>
           </div>
-          <ul className="space-y-2">
-            {createdTasks.map((t) => (
-              <li key={t.id} className="border rounded-md p-3 text-sm flex items-center justify-between">
+                    <ul className="p-3 space-y-2">
+                      {(tasksForType(t.id) || []).length === 0 && (
+                        <li className="text-sm text-gray-600">No Tasks</li>
+                      )}
+                      {(tasksForType(t.id) || []).map(task => (
+                        <li key={task.id} className="border rounded-md p-3 text-sm cursor-pointer" onClick={() => loadTaskIntoForm(task)}>
+                          <div className="flex items-center justify-between">
                 <div>
-                  <div className="font-medium">{t.title} <span className="ml-2 text-gray-500">(id: {t.id}{t.uid ? `, uid: ${t.uid}` : ""})</span></div>
-                  <div className="text-gray-600">type_id: {t.type_id}</div>
+                              <div className="font-medium">{task.title} <span className="text-gray-500 ml-2">(id: {task.id})</span></div>
+                              {task.description && <div className="text-gray-600">{task.description}</div>}
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={() => updateTaskItem(t)} className="px-3 py-1 border rounded-md text-xs">Update</button>
-                  <button onClick={() => deleteTaskItem(t)} className="px-3 py-1 border rounded-md text-xs text-red-600">Delete</button>
+                              <button onClick={(e) => { e.stopPropagation(); loadTaskIntoForm(task); }} className="px-3 py-1 border rounded-md text-xs">Edit</button>
+                              <button onClick={(e) => { e.stopPropagation(); onDeleteTask(task); }} className="px-3 py-1 border rounded-md text-xs text-red-600">Delete</button>
+                            </div>
+                          </div>
+                          <div className="mt-2 pl-3">
+                            <div className="text-xs text-gray-500 mb-2">Subtasks</div>
+                            <ul className="space-y-1">
+                              {(subtasksForTask(task.id) || []).length === 0 && <li className="text-xs text-gray-500">No Subtasks</li>}
+                              {(subtasksForTask(task.id) || []).map(st => (
+                                <li key={st.id} className="flex items-center justify-between border rounded px-2 py-1 text-xs cursor-pointer" onClick={(e) => { e.stopPropagation(); loadSubtaskIntoForm(st); }}>
+                                  <span>{st.title}</span>
+                                  <div className="flex items-center gap-2">
+                                    <button onClick={(e) => { e.stopPropagation(); loadSubtaskIntoForm(st); }} className="px-2 py-0.5 border rounded">Edit</button>
+                                    <button onClick={(e) => { e.stopPropagation(); onDeleteSubtask(st); }} className="px-2 py-0.5 border rounded text-red-600">Delete</button>
+                                  </div>
+                                </li>
+                              ))}
+                            </ul>
                 </div>
               </li>
             ))}
           </ul>
         </div>
-
-        <div className="bg-white border rounded-xl shadow-md p-6 mb-6">
-          <h3 className="text-lg font-semibold mb-4">Manage Subtasks</h3>
-          <div className="flex gap-2 mb-3">
-            <input className="border rounded-md px-3 py-2 text-sm w-24" type="number" placeholder="task_id" value={subForm.task_id} onChange={(e) => setSubForm({ ...subForm, task_id: Number(e.target.value) })} />
-            <input className="border rounded-md px-3 py-2 text-sm flex-1" placeholder="Title" value={subForm.title} onChange={(e) => setSubForm({ ...subForm, title: e.target.value })} />
-            <button onClick={createSubItem} className="px-3 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700">Create</button>
+                ))}
+              </div>
+            )}
           </div>
-          <ul className="space-y-2">
-            {createdSubs.map((s) => (
-              <li key={s.id} className="border rounded-md p-3 text-sm flex items-center justify-between">
+          <div className="bg-white border rounded-xl shadow-md p-6">
+            <h3 className="text-lg font-semibold mb-4">{taskForm.id ? 'Edit Task' : 'Create Task'}</h3>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">Type (required)</label>
+                <select
+                  className="border rounded-md px-3 py-2 text-sm w-full"
+                  value={taskForm.type_id}
+                  onChange={(e) => setTaskForm({ ...taskForm, type_id: Number(e.target.value) })}
+                  disabled={typesLoading || (types || []).length === 0}
+                >
+                  <option value={0}>Select a Type…</option>
+                  {orderedTypes.map(t => <option key={t.id} value={Number(t.id)}>{t.name}</option>)}
+                </select>
+                <div className="text-xs text-gray-500 mt-1">Tasks must belong to a Type.</div>
+                {formErrors.type && <div className="text-xs text-red-600 mt-1">Select a Type to continue.</div>}
+              </div>
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">Title (required)</label>
+                <input
+                  className="border rounded-md px-3 py-2 text-sm w-full"
+                  placeholder="Task title"
+                  value={taskForm.title}
+                  onChange={(e) => setTaskForm({ ...taskForm, title: e.target.value })}
+                  disabled={!typeSelected}
+                />
+                {formErrors.title && <div className="text-xs text-red-600 mt-1">Title is required.</div>}
+              </div>
                 <div>
-                  <div className="font-medium">{s.title} <span className="ml-2 text-gray-500">(id: {s.id}{s.uid ? `, uid: ${s.uid}` : ""})</span></div>
-                  <div className="text-gray-600">task_id: {s.task_id}</div>
+                <label className="block text-xs text-gray-600 mb-1">Description</label>
+                <textarea
+                  className="border rounded-md px-3 py-2 text-sm w-full"
+                  rows={3}
+                  placeholder="Optional description"
+                  value={taskForm.description}
+                  onChange={(e) => setTaskForm({ ...taskForm, description: e.target.value })}
+                  disabled={!typeSelected}
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={onSubmitTask} disabled={formErrors.type || formErrors.title} className="px-3 py-2 bg-blue-600 text-white rounded-md text-sm disabled:opacity-50">
+                  {taskForm.id ? 'Save Changes' : 'Create Task'}
+                </button>
+                <button onClick={resetTaskForm} className="px-3 py-2 border rounded-md text-sm">Reset form</button>
+              </div>
+            </div>
+            <div className="mt-6 border-t pt-4">
+              <h4 className="text-sm font-semibold mb-3">Subtasks</h4>
+              <div className="grid sm:grid-cols-3 gap-2 items-end">
+                <div className="sm:col-span-1">
+                  <label className="block text-xs text-gray-600 mb-1">Parent Task</label>
+                  <input
+                    className="border rounded-md px-3 py-2 text-sm w-full"
+                    value={subtaskForm.task_id || taskForm.id || 0}
+                    onChange={(e) => setSubtaskForm({ ...subtaskForm, task_id: Number(e.target.value) })}
+                    placeholder="Task ID"
+                    disabled={!taskForm.id}
+                  />
+                  <div className="text-xs text-gray-500 mt-1">Select a Task from the left list first.</div>
                 </div>
-                <div className="flex gap-2">
-                  <button onClick={() => updateSubItem(s)} className="px-3 py-1 border rounded-md text-xs">Update</button>
-                  <button onClick={() => deleteSubItem(s)} className="px-3 py-1 border rounded-md text-xs text-red-600">Delete</button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        <div className="bg-white border rounded-xl shadow-md p-6 mb-6">
-          <h3 className="text-lg font-semibold mb-4">Manage Events</h3>
-          <div className="grid md:grid-cols-2 gap-2 mb-3">
-            <input className="border rounded-md px-3 py-2 text-sm" placeholder="calendar_id" value={eventForm.calendar_id} onChange={(e) => setEventForm({ ...eventForm, calendar_id: e.target.value })} />
-            <input className="border rounded-md px-3 py-2 text-sm" placeholder="title" value={eventForm.title} onChange={(e) => setEventForm({ ...eventForm, title: e.target.value })} />
-            <input className="border rounded-md px-3 py-2 text-sm" placeholder="start ISO" value={eventForm.start} onChange={(e) => setEventForm({ ...eventForm, start: e.target.value })} />
-            <input className="border rounded-md px-3 py-2 text-sm" placeholder="end ISO" value={eventForm.end} onChange={(e) => setEventForm({ ...eventForm, end: e.target.value })} />
-            <input className="border rounded-md px-3 py-2 text-sm" placeholder="type_id (e.g., type-work)" value={eventForm.type_id} onChange={(e) => setEventForm({ ...eventForm, type_id: e.target.value })} />
-            <input className="border rounded-md px-3 py-2 text-sm" placeholder="#color" value={eventForm.color} onChange={(e) => setEventForm({ ...eventForm, color: e.target.value })} />
-          </div>
-          <button onClick={createEventItem} className="px-3 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700">Create Event</button>
-          <ul className="space-y-2 mt-3">
-            {createdEvents.map((e) => (
-              <li key={e.id} className="border rounded-md p-3 text-sm flex items-center justify-between">
-                <div>
-                  <div className="font-medium">{e.title} <span className="ml-2 text-gray-500">(id: {e.id}{e.uid ? `, uid: ${e.uid}` : ""})</span></div>
-                  <div className="text-gray-600">{e.start} → {e.end}</div>
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={() => updateEventItem(e)} className="px-3 py-1 border rounded-md text-xs">Update</button>
-                  <button onClick={() => deleteEventItem(e)} className="px-3 py-1 border rounded-md text-xs text-red-600">Delete</button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div className="bg-white border rounded-xl shadow-md p-6">
-          <h3 className="text-lg font-semibold mb-4">Quick Endpoint Tests</h3>
-          <div className="space-y-6">
-            {samples.map((section) => (
-              <div key={section.group}>
-                <div className="text-sm font-medium text-gray-700 mb-2">{section.group}</div>
-                <div className="grid md:grid-cols-2 gap-2">
-                  {section.items.map((it) => (
-                    <button
-                      key={it.label}
-                      onClick={() => runQuick(it)}
-                      className="text-left w-full border rounded-md px-3 py-2 text-sm hover:bg-gray-50"
-                      title={`${it.method} ${it.path}`}
-                    >
-                      <span className="inline-block min-w-[64px] mr-2 px-2 py-0.5 rounded bg-gray-100 text-gray-700 text-xs font-mono">{it.method}</span>
-                      <span className="font-medium">{it.label}</span>
-                    </button>
-                  ))}
+                <div className="sm:col-span-2">
+                  <label className="block text-xs text-gray-600 mb-1">Subtask title</label>
+                  <input
+                    className="border rounded-md px-3 py-2 text-sm w-full"
+                    value={subtaskForm.title}
+                    onChange={(e) => setSubtaskForm({ ...subtaskForm, title: e.target.value })}
+                    placeholder="Subtask title"
+                    disabled={!taskForm.id}
+                  />
                 </div>
               </div>
+              <div className="flex items-center gap-2 mt-3">
+                <button onClick={onSubmitSubtask} disabled={!taskForm.id || !subtaskForm.title?.trim()} className="px-3 py-2 bg-blue-600 text-white rounded-md text-sm disabled:opacity-50">
+                  {subtaskForm.id ? 'Save Subtask' : 'Add Subtask'}
+                </button>
+                <button onClick={resetSubtaskForm} className="px-3 py-2 border rounded-md text-sm">Reset subtask form</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Events */}
+        <div className="bg-white border rounded-xl shadow-md p-6 mb-6">
+          <h3 className="text-lg font-semibold mb-4">Events</h3>
+          {eventsStatus.loading && <div className="text-sm text-gray-600">Loading...</div>}
+          {eventsStatus.error && <div className="text-sm text-red-600">Error: {eventsStatus.error} <button className="underline" onClick={() => eventsStore.loadAll({ force: true })}>Retry</button></div>}
+          {!eventsStatus.loading && !eventsStatus.error && (
+            <ul className="space-y-2">
+              {allEvents.length === 0 && <li className="text-sm text-gray-600">No Events</li>}
+              {allEvents.map((e) => (
+              <li key={e.id} className="border rounded-md p-3 text-sm flex items-center justify-between">
+                <div>
+                    <div className="font-medium">{e.label || e.title || 'Untitled'} <span className="ml-2 text-gray-500">(id: {e.id})</span></div>
+                    <div className="text-gray-600">{e.dateKey} • {e.startMinutes} → {e.startMinutes + (e.duration || 0)} mins</div>
+                </div>
+              </li>
             ))}
-          </div>
-          <div className="mt-4">
-            {quickError && (
-              <pre className="bg-red-50 text-red-800 border border-red-200 p-3 rounded-md text-sm whitespace-pre-wrap">{quickError}</pre>
-            )}
-            {quickResult && (
-              <pre className="bg-green-50 text-green-800 border border-green-200 p-3 rounded-md text-sm overflow-auto">{JSON.stringify(quickResult, null, 2)}</pre>
-            )}
-            {quickLoading && (
-              <div className="text-sm text-gray-600">Loading...</div>
-            )}
-          </div>
+          </ul>
+          )}
+        </div>
+
+        {/* Diagnostics */}
+        <div className="bg-white border rounded-xl shadow-md p-6">
+          <h3 className="text-lg font-semibold mb-4">Raw JSON / Diagnostics</h3>
+          <details>
+            <summary className="cursor-pointer text-sm">Open diagnostics</summary>
+            <div className="grid md:grid-cols-2 gap-4 mt-3">
+              <pre className="bg-gray-50 border rounded p-2 text-xs overflow-auto">{JSON.stringify({ types, typesLoading, typesError }, null, 2)}</pre>
+              <pre className="bg-gray-50 border rounded p-2 text-xs overflow-auto">{JSON.stringify({ tasks: tasks(), tasksState: { loading: tasksLoading, tasksError } }, null, 2)}</pre>
+              <pre className="bg-gray-50 border rounded p-2 text-xs overflow-auto">{JSON.stringify({ events: allEvents, eventsStatus }, null, 2)}</pre>
+                </div>
+          </details>
+        </div>
         </div>
       </div>
     </div>

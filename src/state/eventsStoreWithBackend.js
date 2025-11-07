@@ -67,6 +67,9 @@ export function createEventsStoreWithBackend(initial = []) {
   let byDate = new Map();
   let cachedState = { byId, byDate };
   let isInitialized = false;
+  let loading = false;
+  let error = null;
+  let lastLoadedAt = 0;
 
   const link = (dateKey, id) => {
     if (!byDate.has(dateKey)) byDate.set(dateKey, new Set());
@@ -99,11 +102,11 @@ export function createEventsStoreWithBackend(initial = []) {
   // Initialize from backend
   const initialize = async () => {
     if (isInitialized) return;
-    
     const cid = newCorrelationId("store-init");
     const g = TBLog.group("Store: Initialize (rehydrate events)", cid);
     
     try {
+      loading = true; error = null;
       // Load events for current month (extend range as needed)
       const now = new Date();
       const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -143,6 +146,7 @@ export function createEventsStoreWithBackend(initial = []) {
       });
 
       isInitialized = true;
+      lastLoadedAt = Date.now();
       notify();
       TBLog.kv("Store state (post-init)", { totalEvents: filtered.length, suspiciousCount: diagnosis.suspiciousCount });
     } catch (error) {
@@ -151,8 +155,41 @@ export function createEventsStoreWithBackend(initial = []) {
       byId.clear();
       byDate.clear();
       isInitialized = true;
+      error = error?.message || String(error);
+      lastLoadedAt = Date.now();
       notify();
     } finally {
+      loading = false;
+      g.end();
+    }
+  };
+
+  // New: explicit load method with broader range for API testing page
+  const loadAll = async ({ force = false } = {}) => {
+    if (loading) return;
+    if (!force && lastLoadedAt && (Date.now() - lastLoadedAt < 5000)) return;
+    const cid = newCorrelationId("store-load");
+    const g = TBLog.group("Store: Load all events (broad range)", cid);
+    try {
+      loading = true; error = null;
+      const from = new Date(); from.setFullYear(from.getFullYear() - 1);
+      const to = new Date(); to.setFullYear(to.getFullYear() + 1);
+      const backendEvents = await scheduledEventsApi.getForRange(from.toISOString(), to.toISOString());
+      const safeEvents = Array.isArray(backendEvents) ? backendEvents : [];
+      const frontendEvents = safeEvents.map(fromBackendEvent);
+      byId.clear(); byDate.clear();
+      frontendEvents.forEach((fe) => {
+        byId.set(fe.id, fe);
+        link(fe.dateKey, fe.id);
+      });
+      lastLoadedAt = Date.now();
+      notify();
+    } catch (e) {
+      error = e?.message || String(e);
+      lastLoadedAt = Date.now();
+      notify();
+    } finally {
+      loading = false;
       g.end();
     }
   };
@@ -289,6 +326,7 @@ export function createEventsStoreWithBackend(initial = []) {
   };
 
   const getAllEvents = () => Array.from(byId.values());
+  const getStatus = () => ({ loading, error, lastLoadedAt });
 
   // Auto-initialize on first use
   initialize();
@@ -297,6 +335,8 @@ export function createEventsStoreWithBackend(initial = []) {
     keyOf,
     get, 
     subscribe,
+    getStatus,
+    loadAll,
     upsertEvent, 
     moveEventToDay, 
     updateEventTime, 

@@ -1,6 +1,7 @@
 package com.timeblocks.model;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 
 @Entity
@@ -56,10 +57,12 @@ public class Subtask {
         this.done = done;
     }
     
+    @JsonIgnore
     public Boolean isDone() {
         return done != null && done == 1;
     }
     
+    @JsonIgnore
     public void setDone(Boolean done) {
         this.done = done != null && done ? 1 : 0;
     }

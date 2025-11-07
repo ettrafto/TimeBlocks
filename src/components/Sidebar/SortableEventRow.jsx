@@ -10,7 +10,8 @@ export default function SortableEventRow({ event, typeId }) {
     data: { context: 'sidebar', kind: 'task', typeId: String(typeId), eventId: String(event.id) },
   });
 
-  const { types } = useTypesStore();
+  const { items } = useTypesStore();
+  const types = items || [];
 
   const task = {
     id: String(event.id),

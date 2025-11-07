@@ -45,6 +45,9 @@ import DiagnosticsPage from './pages/DiagnosticsPage';
 import { computeEventLayout } from './utils/overlap';
 import BackendTest from './pages/BackendTest';
 import ApiTestingPage from './pages/api-testing';
+import DbAdmin from './pages/debug/DbAdmin';
+import SeedTools from './pages/debug/SeedTools';
+import Logs from './pages/debug/Logs';
 import { eventTypesApi, libraryEventsApi, scheduledEventsApi, CALENDAR_ID } from './services/api';
 import DebugToggle from './components/DebugToggle';
 
@@ -2916,6 +2919,18 @@ function App() {
 
   if (location.pathname === '/api-testing') {
     return <ApiTestingPage />;
+  }
+
+  if (location.pathname === '/debug/db-admin') {
+    return <DbAdmin />;
+  }
+
+  if (location.pathname === '/debug/seed-tools') {
+    return <SeedTools />;
+  }
+
+  if (location.pathname === '/debug/logs') {
+    return <Logs />;
   }
 
   if (location.pathname === '/create') {

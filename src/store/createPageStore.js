@@ -1,6 +1,13 @@
 // src/store/createPageStore.js
 import { create } from "zustand";
 import { api } from "../api/createPageApi.js";
+import { tasksClient } from "../lib/api/tasksClient.js";
+
+function normalizeTask(row) {
+  if (!row) return row;
+  const type_id = row.type_id != null ? row.type_id : (row.typeId != null ? row.typeId : null);
+  return { ...row, type_id };
+}
 
 const useCreatePageStore = create((set, get) => ({
   types: [],
@@ -9,12 +16,17 @@ const useCreatePageStore = create((set, get) => ({
   loading: false,
 
   init: async () => {
+    const s0 = get();
+    if (s0.loading) return;
+    // Skip re-init if we already have types loaded
+    if ((s0.types || []).length > 0) return;
     set({ loading: true });
     try {
       const types = await api.listTypes();
       const tasksByType = {};
       for (const t of types) {
-        tasksByType[t.id] = await api.listTasksByType(t.id);
+        const rows = await api.listTasksByType(t.id);
+        tasksByType[t.id] = (rows || []).map(normalizeTask);
       }
       set({ types, tasksByType, loading: false });
     } catch (error) {
@@ -68,11 +80,13 @@ const useCreatePageStore = create((set, get) => ({
   // Task CRUD
   addTask: async (p) => {
     try {
-      const task = await api.createTask(p);
+      // Use shared tasks client like API-testing page (handles validation/shape)
+      const task = await tasksClient.createTask({ type_id: p.type_id, title: p.title, description: p.description, status: p.status });
+      const t = normalizeTask(task);
       set((s) => ({ 
         tasksByType: { 
           ...s.tasksByType, 
-          [task.type_id]: [task, ...(s.tasksByType[task.type_id] || [])]
+          [t.type_id]: [t, ...(s.tasksByType[t.type_id] || [])]
         }
       }));
     } catch (error) {
@@ -83,7 +97,7 @@ const useCreatePageStore = create((set, get) => ({
 
   updateTask: async (id, p) => {
     try {
-      const updated = await api.updateTask(id, p);
+      const updated = normalizeTask(await tasksClient.updateTask(id, p));
       set((s) => {
         // Find old type_id
         let oldTypeId = null;
