@@ -2,6 +2,8 @@ import React from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import { trackScheduledItemRender } from '../../utils/diagnostics';
 import { minutesToPixels, formatTime } from '../../utils/time';
+import { useTypesStore } from '../../state/typesStore.js';
+import { hexToHsl, withSaturation, withLightness, hslToString, readableTextOn, tailwindToHex } from '../Create/colorUtils.js';
 
 // ========================================
 // COMPONENT: ScheduledItem (task placed in calendar)
@@ -27,6 +29,7 @@ export default function ScheduledItem({
   // CRITICAL: allowDrag considers BOTH item-specific AND global resize state
   const allowDrag = !isBeingResized && !isResizing;
   
+  const innerRef = React.useRef(null);
   const { attributes, listeners, setNodeRef, isDragging, transform } = useDraggable({
     id: item.id,
     data: {
@@ -35,6 +38,12 @@ export default function ScheduledItem({
     },
     disabled: !allowDrag, // Hard stop: disabled when ANY resize is active
   });
+
+  // Combine refs so we can also read computed styles
+  const setCombinedRef = React.useCallback((node) => {
+    setNodeRef(node);
+    innerRef.current = node;
+  }, [setNodeRef]);
 
   // StackOverflow pattern: Only spread listeners when drag is allowed
   const listenersOnState = allowDrag ? listeners : undefined;
@@ -80,6 +89,19 @@ export default function ScheduledItem({
   
   // Apply transform for dragging
   // CRITICAL: Only apply transform when actually dragging AND drag is allowed
+  // Derive background/text color from type color (desaturated for readability)
+  const types = useTypesStore()?.items || [];
+  const typeHex = (() => {
+    const t = types.find(tt => String(tt.id) === String(item.typeId));
+    const c = t?.color;
+    if (!c) return '#3b82f6';
+    return c.startsWith('#') ? c : tailwindToHex(c);
+  })();
+  const base = hexToHsl(typeHex);
+  // Use the designated type color directly for solid event background
+  const bg = typeHex;
+  const text = readableTextOn(base);
+
   const style = {
     top: `${topPosition}px`,
     height: `${height}px`,
@@ -88,20 +110,35 @@ export default function ScheduledItem({
     transform: (isDragging && allowDrag && transform) 
       ? `translate3d(${transform.x}px, ${transform.y}px, 0)` 
       : undefined, // Gate transform to prevent animation during resize
-    opacity: (isDragging && allowDrag) ? 0.3 : 1,
+    background: bg,
+    backgroundColor: bg,      // force solid color
+    backgroundImage: 'none',  // prevent any inherited background-image
+    color: text,
   };
   
   console.log(`🎨 ScheduledItem ${item.id} style:`, style);
+
+  // Debug: log computed CSS after paint
+  React.useEffect(() => {
+    if (!innerRef.current) return;
+    const cs = window.getComputedStyle(innerRef.current);
+    console.log('🧪 Computed styles for event', item.id, {
+      backgroundColor: cs.backgroundColor,
+      opacity: cs.opacity,
+      filter: cs.filter,
+      mixBlendMode: cs.mixBlendMode,
+    });
+  }, [item.id, bg, text, leftPct, widthPct, topPosition, height]);
 
   // Calculate end time for display
   const endMinutes = item.startMinutes + duration;
 
   return (
     <div
-      ref={setNodeRef}
+      ref={setCombinedRef}
       {...attributes}
       {...listenersOnState}  // StackOverflow pattern: only spread when allowDrag=true
-      className={`absolute ${item.color} text-white px-3 py-2 rounded shadow-lg ${allowDrag ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'} z-10 flex flex-col justify-between overflow-visible ${isConflicting ? 'ring-2 ring-red-500/70 bg-red-900/20' : ''}`}
+      className={`absolute px-3 py-2 rounded shadow-lg ${allowDrag ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'} z-10 flex flex-col justify-between overflow-visible ${isConflicting ? 'ring-2 ring-red-500/70' : ''}`}
       style={style}
       data-event-id={item.id}
       data-allow-drag={allowDrag}

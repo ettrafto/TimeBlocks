@@ -14,42 +14,29 @@ export default function TaskBlock({ task, onClick, onDelete, types = [] }) {
   // ========================================
   // SAFELY FIND TYPE NAME (guard against undefined types array)
   // ========================================
-  const typeName = task.typeId && types && types.length > 0
-    ? types.find(t => t.id === task.typeId)?.name 
-    : null;
-  
-  // Debug: Log if type lookup fails
-  if (task.typeId && (!types || types.length === 0)) {
-    console.warn('⚠️ TaskBlock: types array is empty/undefined for event:', task.name || task.label);
-  }
-  if (task.typeId && types && types.length > 0 && !typeName) {
-    console.warn('⚠️ TaskBlock: type not found for typeId:', task.typeId, 'in event:', task.name || task.label);
-  }
+  // Type display removed per request
 
   return (
     <div
-      className={`${task.color || 'bg-gray-500'} text-white px-4 py-3 rounded-lg shadow-md cursor-grab active:cursor-grabbing hover:opacity-90 transition-opacity relative group`}
+      className={`px-4 py-3 rounded-lg shadow-md cursor-grab active:cursor-grabbing hover:opacity-90 transition-opacity relative group`}
+      style={{ background: task.bgColor || task.color || '#6b7280', color: task.textColor || '#ffffff' }}
     >
       <div className="font-semibold">{task.name || task.label}</div>
       {task.duration && (
         <div className="text-xs opacity-80 mt-1">{task.duration} minutes</div>
       )}
-      {typeName && (
-        <div className="text-xs opacity-70 mt-0.5">📁 {typeName}</div>
-      )}
-      
-      {/* Edit and Delete Icons - appear on hover */}
-      <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+
+      {/* Inline action buttons styled like Create page */}
+      <div className="mt-2 flex items-center gap-2 justify-end">
         {onClick && (
           <button
             onClick={(e) => {
               e.stopPropagation();
               onClick();
             }}
-            className="bg-white bg-opacity-20 hover:bg-opacity-30 rounded px-1.5 py-0.5 text-xs transition-colors"
-            title="Edit event"
+            className="px-2 py-1 text-xs rounded-md hover:bg-white/20 transition-colors"
           >
-            ✏️
+            Edit
           </button>
         )}
         {onDelete && (
@@ -58,10 +45,9 @@ export default function TaskBlock({ task, onClick, onDelete, types = [] }) {
               e.stopPropagation();
               onDelete();
             }}
-            className="bg-red-500 bg-opacity-70 hover:bg-opacity-90 rounded px-1.5 py-0.5 text-xs transition-colors"
-            title="Delete event"
+            className="px-2 py-1 text-xs rounded-md hover:bg-white/20 transition-colors"
           >
-            🗑️
+            Delete
           </button>
         )}
       </div>

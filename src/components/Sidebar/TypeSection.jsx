@@ -6,6 +6,13 @@ import { uiStore } from '../../state/uiStore.js';
 import { useCreatePageStore } from '../../store/createPageStore.js';
 import SortableEventRow from './SortableEventRow.jsx';
 import { sortByOrder } from '../../utils/sort.js';
+import { useTypesStore } from '../../state/typesStore.js';
+
+const PlusIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+  </svg>
+);
 
 function useUi() {
   return useSyncExternalStore(uiStore.subscribe, uiStore.get, uiStore.get);
@@ -24,6 +31,7 @@ export default function TypeSection({ typeEntity }) {
   const order = ui.eventOrderByType?.[String(typeEntity.id)] || [];
 
   const { tasksByType, addTask } = useCreatePageStore();
+  const { update: updateType } = useTypesStore.getState ? useTypesStore : { update: null };
   const raw = tasksByType?.[typeEntity.id] || [];
   const events = useMemo(() => sortByOrder(raw, order), [raw, order]);
 
@@ -35,6 +43,10 @@ export default function TypeSection({ typeEntity }) {
           count={raw.length}
           collapsed={collapsed}
           onToggle={toggle}
+          onChangeColor={(hex) => {
+            // persist color to types store/backend
+            try { useTypesStore.getState().update(typeEntity.id, { color: hex }); } catch {}
+          }}
         />
       </div>
       {!collapsed && (
@@ -51,24 +63,17 @@ export default function TypeSection({ typeEntity }) {
           </SortableContext>
           <div className="mt-2">
             <button
-              className="text-sm text-blue-600 hover:underline"
               onClick={() => addTask({ type_id: parseInt(typeEntity.id, 10), title: 'New event' })}
+              className="w-full py-2 px-3 text-sm font-medium rounded-xl border-2 border-dashed transition-all duration-200 flex items-center justify-center gap-2 shrink-0 border-gray-300 text-gray-600 bg-transparent hover:bg-gray-50"
+              title="Add event"
             >
-              + Add event
+              <PlusIcon />
+              <span>Add Event</span>
             </button>
           </div>
         </div>
       )}
-      {collapsed && (
-        <div className="px-3 pb-2">
-          <button
-            className="text-sm text-blue-600 hover:underline"
-            onClick={() => addTask({ type_id: parseInt(typeEntity.id, 10), title: 'New event' })}
-          >
-            + Add event
-          </button>
-        </div>
-      )}
+      {collapsed && null}
     </section>
   );
 }

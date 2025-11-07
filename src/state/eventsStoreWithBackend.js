@@ -1,5 +1,6 @@
 // src/state/eventsStoreWithBackend.js
 import { formatISO, parseISO, addMinutes } from 'date-fns';
+import { START_HOUR } from '../constants/calendar';
 import { scheduledEventsApi } from '../services/api';
 import { isValidEvent, diagnoseEvents, cleanEvents } from '../utils/eventValidation';
 import { TBLog } from '../../shared/logging/logger.js';
@@ -16,9 +17,10 @@ function keyOf(date) {
 
 // Convert frontend event to backend format
 function toBackendEvent(event, calendarId = 'cal_main') {
-  // Parse dateKey and startMinutes to create ISO timestamps
-  const baseDate = parseISO(event.dateKey);
-  const startDate = addMinutes(baseDate, event.startMinutes || 0);
+  // Build local day start at START_HOUR, then add minutes to avoid timezone drift
+  const [y, m, d] = String(event.dateKey || formatISO(new Date(), { representation: 'date' })).split('-').map((n) => parseInt(n, 10));
+  const dayStart = new Date(y, (m - 1), d, START_HOUR, 0, 0, 0);
+  const startDate = addMinutes(dayStart, event.startMinutes || 0);
   const endDate = addMinutes(startDate, event.duration || 30);
 
   return {
@@ -221,20 +223,43 @@ export function createEventsStoreWithBackend(initial = []) {
       // Sync to backend
       try {
         const backendEvent = toBackendEvent(e);
+        try { console.log('🛰️ upsertEvent → backend payload', backendEvent); } catch {}
+        try { TBLog && TBLog.kv && TBLog.kv('upsertEvent backend payload', backendEvent); } catch {}
         if (prev) {
           await scheduledEventsApi.update(e.id, backendEvent);
+          try { console.log('✅ Event updated on backend', e.id); } catch {}
           TBLog.info('Event updated on backend', { eventId: e.id });
         } else {
-          await scheduledEventsApi.create(backendEvent);
-          TBLog.info('Event created on backend', { eventId: e.id });
+          const created = await scheduledEventsApi.create(backendEvent);
+          const newId = created?.id || created?.event_id || null;
+          try { console.log('✅ Event created on backend (server-id assigned)', { tempId: e.id, newId }); } catch {}
+          TBLog.info('Event created on backend', { eventId: newId || e.id });
+          if (newId && newId !== e.id) {
+            // Update local store id mapping
+            const current = byId.get(e.id) || e;
+            const updated = { ...current, id: String(newId) };
+            byId.delete(e.id);
+            byId.set(String(newId), updated);
+            // Relink in byDate sets
+            for (const [dk, setIds] of byDate.entries()) {
+              if (setIds.has(e.id)) {
+                setIds.delete(e.id);
+                setIds.add(String(newId));
+              }
+            }
+            notify();
+            return String(newId);
+          }
         }
       } catch (error) {
+        try { console.warn('❌ Failed to sync event to backend', error); } catch {}
         TBLog.error('Failed to sync event to backend', error);
         // TODO: Add retry logic or offline queue
       }
     } finally {
       g.end();
     }
+    return null;
   };
 
   const moveEventToDay = async (id, newDateKey, patch = {}) => {

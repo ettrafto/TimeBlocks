@@ -50,6 +50,9 @@ import SeedTools from './pages/debug/SeedTools';
 import Logs from './pages/debug/Logs';
 import { eventTypesApi, libraryEventsApi, scheduledEventsApi, CALENDAR_ID } from './services/api';
 import DebugToggle from './components/DebugToggle';
+import { hexToHsl, readableTextOn, tailwindToHex, withSaturation, withLightness, hslToString } from './components/Create/colorUtils.js';
+import { useScheduleStore } from './stores/scheduleStore';
+import { scheduleClient } from './lib/api/scheduleClient';
 
 // ========================================
 // PHASE 1 DIAGNOSTICS - Duplicate Draggable Detection
@@ -892,7 +895,7 @@ function TaskBlock({ task, onClick, onDelete, types = [] }) {
   // SAFELY FIND TYPE NAME (guard against undefined types array)
   // ========================================
   const typeName = task.typeId && types && types.length > 0
-    ? types.find(t => t.id === task.typeId)?.name 
+    ? types.find(t => String(t.id) === String(task.typeId))?.name 
     : null;
   
   // Debug: Log if type lookup fails
@@ -1001,6 +1004,7 @@ function ScheduledItemPreview({
   pixelsPerSlot,
   layoutStyle = { leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 },
   showDebug = false,
+  types,
 }) {
   const topPosition = minutesToPixels(item.startMinutes, pixelsPerSlot);
   const duration = item.duration || 30;
@@ -1009,14 +1013,33 @@ function ScheduledItemPreview({
   
   const { leftPct, widthPct } = layoutStyle;
 
+  // Resolve color consistently for preview (from item or its type)
+  const typesInStoreHook = (useTypesStore ? useTypesStore(state => state.items) : []) || [];
+  const typesInStore = (types && types.length) ? types : typesInStoreHook;
+  const typeHex = (() => {
+    const t = typesInStore.find(tt => String(tt.id) === String(item?.typeId));
+    const c = t?.color;
+    if (c) return c.startsWith('#') ? c : tailwindToHex(c);
+    if (item?.color) return item.color.startsWith('#') ? item.color : tailwindToHex(item.color);
+    return '#3b82f6';
+  })();
+  const base = hexToHsl(typeHex);
+  const bgHsl = withLightness(withSaturation(base, base.s * 0.35), 0.92);
+  const bg = hslToString(bgHsl);
+  const textColor = readableTextOn(bgHsl);
+
   return (
     <div
-      className={`absolute ${item.color} text-white px-3 py-2 rounded shadow-lg z-10 flex flex-col justify-between overflow-visible`}
+      className={`absolute px-3 py-2 rounded shadow-lg z-10 flex flex-col justify-between overflow-visible`}
       style={{
         top: `${topPosition}px`,
         height: `${height}px`,
         left: `${leftPct}%`,
         width: `${widthPct}%`,
+        background: bg,
+        backgroundColor: bg,
+        backgroundImage: 'none',
+        color: textColor,
       }}
       data-preview="true"
     >
@@ -1055,6 +1078,8 @@ function ScheduledItem({
   isResizing = false,
   layoutStyle = { leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 },
   showDebug = false,
+  types,
+  onDelete,
 }) {
   // PHASE 1 DIAGNOSTIC: Track this render
   trackScheduledItemRender(item.id);
@@ -1108,6 +1133,21 @@ function ScheduledItem({
   // Extract layout positioning
   const { leftPct, widthPct } = layoutStyle;
   
+  // Resolve solid background color from item or its type
+  const typesInStoreHook = (useTypesStore ? useTypesStore(state => state.items) : []) || [];
+  const typesInStore = (types && types.length) ? types : typesInStoreHook;
+  const typeHex = (() => {
+    const t = typesInStore.find(tt => String(tt.id) === String(item?.typeId));
+    const c = t?.color;
+    if (c) return c.startsWith('#') ? c : tailwindToHex(c);
+    if (item?.color) return item.color.startsWith('#') ? item.color : tailwindToHex(item.color);
+    return '#3b82f6';
+  })();
+  const base = hexToHsl(typeHex);
+  const bgHsl = withLightness(withSaturation(base, base.s * 0.35), 0.92);
+  const bg = hslToString(bgHsl);
+  const textColor = readableTextOn(bgHsl);
+
   // Apply transform for dragging
   // CRITICAL: Only apply transform when actually dragging AND drag is allowed
   const style = {
@@ -1119,7 +1159,12 @@ function ScheduledItem({
       ? `translate3d(${transform.x}px, ${transform.y}px, 0)` 
       : undefined, // Gate transform to prevent animation during resize
     opacity: (isDragging && allowDrag) ? 0.3 : 1,
+    background: bg,
+    backgroundColor: bg,
+    backgroundImage: 'none',
+    color: textColor,
   };
+  try { console.debug('🎨 Event color resolve', { id: item.id, typeId: item?.typeId, typeHex, bg }); } catch {}
 
   // Calculate end time for display
   const endMinutes = item.startMinutes + duration;
@@ -1129,11 +1174,22 @@ function ScheduledItem({
       ref={setNodeRef}
       {...attributes}
       {...listenersOnState}  // StackOverflow pattern: only spread when allowDrag=true
-      className={`absolute ${item.color} text-white px-3 py-2 rounded shadow-lg ${allowDrag ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'} z-10 flex flex-col justify-between overflow-visible`}
+      className={`absolute px-3 py-2 rounded shadow-lg ${allowDrag ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'} z-10 flex flex-col justify-between overflow-visible`}
       style={style}
       data-event-id={item.id}
       data-allow-drag={allowDrag}
     >
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          try { console.info('🗑️ Unschedule click', { id: item.id, dateKey: item.dateKey }); } catch {}
+          if (onDelete) onDelete(item);
+        }}
+        className="absolute top-1 right-1 text-xs bg-black/20 hover:bg-black/40 text-white rounded px-1"
+        title="Delete"
+      >
+        ×
+      </button>
       <div>
       <div className="font-semibold text-sm">{item.label}</div>
         <div className="text-xs opacity-90">
@@ -1250,6 +1306,7 @@ function CalendarGrid({
   resizeDraft, 
   onResizeStart, 
   isResizing,
+  types,
   // New props for multi-day support (optional)
   dayDate,
   dayKey,
@@ -1437,6 +1494,32 @@ function CalendarGrid({
               isResizing={isResizing}
               layoutStyle={itemLayout}
               showDebug={showDebugLabels}
+              types={types}
+              onDelete={(it) => {
+                try { console.info('🗑️ Unschedule request', { id: it.id, dateKey: it.dateKey }); } catch {}
+                const idStr = String(it.id);
+                if (idStr.startsWith('sched:')) {
+                  try {
+                    const occId = idStr.slice(6);
+                    const scheduleId = occId.split(':')[0];
+                    scheduleClient.deleteSchedule(scheduleId).then(async () => {
+                      // reload visible range
+                      if (dayKey) {
+                        const [y,m,d] = dayKey.split('-').map(n => parseInt(n,10));
+                        const from = new Date(y, m-1, d, 0, 0, 0, 0).getTime();
+                        const to   = new Date(y, m-1, d, 23, 59, 59, 999).getTime();
+                        await useScheduleStore.getState().loadRange({ timeMin: from, timeMax: to, force: true });
+                      }
+                    });
+                  } catch (e) { console.warn('⚠️ Unschedule failed', e); }
+                } else {
+                  try { useEventsStore().removeEvent?.(it.id); } catch {}
+                  // Also update local list immediately
+                  try {
+                    setScheduledItems((prev) => prev.filter((x) => x.id !== it.id));
+                  } catch {}
+                }
+              }}
             />
           );
         })
@@ -1453,6 +1536,7 @@ function CalendarGrid({
             pixelsPerSlot={pixelsPerSlot}
             layoutStyle={layout[resizeDraft.id] || { leftPct: 0, widthPct: 100, columnIndex: 0, overlapCount: 1 }}
             showDebug={showDebugLabels}
+            types={types}
           />
         </div>
       )}
@@ -1844,6 +1928,10 @@ function App() {
   const visibleKeys = useMemo(() => getVisibleKeys(), [selectedDate, viewMode, includeWeekends]);
   const dateKey = getDateKey();
 
+  // Load schedule occurrences for visible range (declared after activeView)
+  const schedStore = useScheduleStore();
+  // Subscribe to schedules to trigger rerenders when occurrences change
+  const _schedRenderTick = useScheduleStore(state => state.byOccId);
   
   // When a specific slot's date changes via a menu, re-anchor to that date
   const handleChangeDay = (index, newDate) => {
@@ -1854,7 +1942,7 @@ function App() {
   // EVENTS STORE
   // ========================================
   
-  const { byId, byDate, getEventsForDate, moveEventToDay, upsertEvent, findConflictsSameDay } = useEventsStore();
+  const { byId, byDate, getEventsForDate, moveEventToDay, updateEventTime, upsertEvent, findConflictsSameDay } = useEventsStore();
   
   // ========================================
   // STATE INITIALIZATION WITH DEMO DATA
@@ -1895,6 +1983,7 @@ function App() {
   
   // State: Custom task templates (user-created event types)
   const [taskTemplates, setTaskTemplates] = useState([]);
+  const [activeDragTemplate, setActiveDragTemplate] = useState(null);
   
   // State: scheduled items in the calendar
   const [scheduledItems, setScheduledItems] = useState([]);
@@ -1990,6 +2079,16 @@ function App() {
       }
     })();
     return () => { cancelled = true; };
+  }, [activeView, displayedDays.map(d => d.toDateString()).join('|')]);
+
+  // Load schedule occurrences for visible range (new schedules API)
+  React.useEffect(() => {
+    if (activeView !== 'calendar' || !displayedDays || displayedDays.length === 0) return;
+    const first = displayedDays[0];
+    const last = displayedDays[displayedDays.length - 1];
+    const fromMs = new Date(first.getFullYear(), first.getMonth(), first.getDate(), 0, 0, 0, 0).getTime();
+    const toMs = new Date(last.getFullYear(), last.getMonth(), last.getDate(), 23, 59, 59, 999).getTime();
+    schedStore.loadRange({ timeMin: fromMs, timeMax: toMs, laneId: undefined, force: false });
   }, [activeView, displayedDays.map(d => d.toDateString()).join('|')]);
 
   // State: Calendar popover for active day selector
@@ -2286,6 +2385,8 @@ function App() {
           console.log('  → scheduledItems updated to:', updated);
           return updated;
         });
+        // Persist create
+        try { upsertEvent(pendingEvent); } catch (e) { console.warn('⚠️ Failed to persist created event from confirm', e); }
         setNextId((prev) => prev + 1);
       }
     }
@@ -2305,7 +2406,7 @@ function App() {
     // Release commit lock
     console.log('  → Releasing commit lock');
     isCommittingRef.current = false;
-  }, [pendingEvent, scheduledItems]);
+  }, [pendingEvent, scheduledItems, upsertEvent]);
   
   // User cancels - discard the pending event
   const handleCancelOverlap = React.useCallback(() => {
@@ -2480,6 +2581,23 @@ function App() {
     }
     
     setActiveId(event.active.id);
+    try {
+      const data = event.active.data?.current;
+      if (data?.type === 'template' && data?.task) {
+        setActiveDragTemplate(data.task);
+      }
+      console.info('🎯 DRAG START', {
+        id: event.active.id,
+        kind: data?.context || data?.type,
+        from: data?.type === 'template' ? 'left-pane' : 'calendar',
+        taskPreview: data?.task ? {
+          id: data.task.id,
+          name: data.task.name || data.task.label,
+          typeId: data.task.typeId,
+          duration: data.task.duration,
+        } : null,
+      });
+    } catch {}
     setGhostPosition(null); // Clear any previous ghost
   }
 
@@ -2610,6 +2728,7 @@ function App() {
     const { active, over, delta } = event;
     
     setActiveId(null);
+    setActiveDragTemplate(null);
 
     const activeData = active.data.current;
 
@@ -2650,10 +2769,10 @@ function App() {
     // FIX: Only require 'over' for template drags (new placements)
     // For scheduled drags (repositioning), allow fallback calculation even if over is null
     if (activeData?.type === 'template') {
-      const overIsCalendar = over?.id === 'calendar' || (typeof over?.id === 'string' && over?.id.includes('::calendar'));
+      const overIsCalendar = over?.id === 'calendar' || (typeof over?.id === 'string' && String(over?.id).includes('::calendar'));
       const hasGhost = !!ghostPosition && (ghostPosition.startMinutes != null);
-      console.log('🟨 Drop gate', { overId: over?.id, overIsCalendar, hasGhost, ghostPosition });
-      if (!overIsCalendar && !hasGhost) {
+      console.info('🟨 Drop gate (template)', { overId: over?.id, overIsCalendar, hasGhost, ghost: ghostPosition });
+      if (!hasGhost) {
         setGhostPosition(null);
         return;
       }
@@ -2662,6 +2781,7 @@ function App() {
 
     if (activeData.type === 'template') {
       console.log('📥 TEMPLATE DROP (from left pane)');
+      console.info('🛠️ Building newItem from ghost', ghostPosition);
       
       // ========================================
       // DRAGGING FROM LEFT PANEL - CREATE NEW SCHEDULED ITEM
@@ -2680,10 +2800,24 @@ function App() {
       // Extract target dayKey from drop zone (if multi-day)
       const targetDayKey = over?.data?.current?.dayKey || ghostPosition?.dayKey || dateKey;
       
+      const byId = (useTypesStore && useTypesStore.getState) ? useTypesStore.getState().byId?.() : null;
+      const typeColorRaw = (() => {
+        // Prefer type color from store; ignore bgColor (HSL) so we don't fall back to blue
+        const tId = task?.typeId || task?.type_id;
+        const t = byId ? byId[String(tId)] : null;
+        if (t?.color) return t.color;
+        // As a secondary fallback, allow explicit hex from task.color only
+        if (task?.color && String(task.color).startsWith('#')) return task.color;
+        return null;
+      })();
+      const typeHexForNew = typeColorRaw
+        ? (typeColorRaw.startsWith('#') ? typeColorRaw : tailwindToHex(typeColorRaw))
+        : null;
+
       const newItem = {
         id: `scheduled-${nextId}`,
         label: task.name || task.label, // Support both name and label
-        color: task.color,
+        color: typeHexForNew || '#3b82f6',
         startMinutes: finalMinutes,
         duration: duration,
         typeId: task.typeId || null, // Preserve type association
@@ -2691,6 +2825,23 @@ function App() {
       };
       
       console.log('📦 New item to place:', newItem);
+
+      // Prepare backend payload preview (legacy /api/events)
+      try {
+        const [y,m,d] = (targetDayKey || dateKey).split('-').map(n => parseInt(n,10));
+        const startBase = new Date(y, (m-1), d, START_HOUR, 0, 0, 0);
+        const startIso = new Date(startBase.getTime() + newItem.startMinutes * 60000).toISOString();
+        const endIso = new Date(startBase.getTime() + (newItem.startMinutes + newItem.duration) * 60000).toISOString();
+        const previewPayload = {
+          calendar_id: CALENDAR_ID,
+          title: newItem.label,
+          start: startIso,
+          end: endIso,
+          type_id: newItem.typeId ?? null,
+          color: newItem.color ?? null,
+        };
+        console.info('🧾 POST /api/events preview (frontend)', previewPayload);
+      } catch (e) { console.warn('⚠️ Failed to build backend payload preview', e); }
 
       // ========================================
       // APPLY MOVE POLICY for template drops (uses centralized conflict gate)
@@ -2706,6 +2857,9 @@ function App() {
         setScheduledItems((prev) => [...prev, newItem]);
         setNextId((prev) => prev + 1);
         setGhostPosition(null);
+
+        // Persist to backend (legacy events API)
+        try { Promise.resolve(upsertEvent(newItem)).then(() => console.info('✅ upsertEvent queued')).catch((e) => console.warn('⚠️ Failed to persist new event (will remain local until refresh)', e)); } catch (e) { console.warn('⚠️ Failed to persist new event (will remain local until refresh)', e); }
         
         // Optional: Check conflicts for informational purposes
         if (CONFLICT_BEHAVIOR === 'inform') {
@@ -2766,6 +2920,18 @@ function App() {
               return updated;
             });
             setNextId((prev) => prev + 1);
+            // Persist create now that commit is safe
+            try {
+              console.info('🛰️ Persisting event (commit-safe) via upsertEvent');
+              Promise.resolve(upsertEvent(newItem))
+                .then((serverId) => {
+                  console.info('✅ upsertEvent (commit-safe) queued', { serverId });
+                  if (serverId) {
+                    setScheduledItems((prev) => prev.map((it) => (it.id === newItem.id ? { ...it, id: String(serverId) } : it)));
+                  }
+                })
+                .catch((e) => console.warn('⚠️ Persist (commit-safe) failed', e));
+            } catch (e) { console.warn('⚠️ Persist (commit-safe) threw', e); }
           },
           isCommittingRef,
         });
@@ -2825,6 +2991,18 @@ function App() {
           )
         );
         setGhostPosition(null);
+        try {
+          console.info('🛰️ Persist move (always)', { id: item.id, to: { dayKey: targetDayKey, startMinutes: finalMinutes } });
+          if (targetDayKey !== item.dateKey) {
+            Promise.resolve(moveEventToDay(item.id, targetDayKey, { startMinutes: finalMinutes, duration: item.duration || 30 }))
+              .then(() => console.info('✅ moveEventToDay queued'))
+              .catch((e) => console.warn('⚠️ moveEventToDay failed', e));
+          } else {
+            Promise.resolve(updateEventTime(item.id, finalMinutes, item.duration || 30))
+              .then(() => console.info('✅ updateEventTime queued'))
+              .catch((e) => console.warn('⚠️ updateEventTime failed', e));
+          }
+        } catch (e) { console.warn('⚠️ Persist move threw', e); }
         
         // Optional: Check conflicts for informational purposes
         if (CONFLICT_BEHAVIOR === 'inform') {
@@ -2869,6 +3047,18 @@ function App() {
                   : schedItem
               )
             );
+            try {
+              console.info('🛰️ Persist move (commit-safe)', { id: item.id, to: { dayKey: targetDayKey, startMinutes: finalMinutes } });
+              if (targetDayKey !== item.dateKey) {
+                Promise.resolve(moveEventToDay(item.id, targetDayKey, { startMinutes: finalMinutes, duration: item.duration || 30 }))
+                  .then(() => console.info('✅ moveEventToDay queued'))
+                  .catch((e) => console.warn('⚠️ moveEventToDay failed', e));
+              } else {
+                Promise.resolve(updateEventTime(item.id, finalMinutes, item.duration || 30))
+                  .then(() => console.info('✅ updateEventTime queued'))
+                  .catch((e) => console.warn('⚠️ updateEventTime failed', e));
+              }
+            } catch (e) { console.warn('⚠️ Persist move threw', e); }
           },
           isCommittingRef,
         });
@@ -2886,7 +3076,10 @@ function App() {
     if (!activeId) return null;
     
     if (activeId.startsWith('template-')) {
-      const template = taskTemplates.find((t) => `template-${t.id}` === activeId);
+      let template = taskTemplates.find((t) => `template-${t.id}` === activeId);
+      if (!template && activeDragTemplate && `template-${activeDragTemplate.id}` === activeId) {
+        template = activeDragTemplate;
+      }
       if (!template) {
         console.warn('⚠️ DragOverlay: Template not found for activeId:', activeId);
       }
@@ -3208,14 +3401,29 @@ function App() {
                 onResizeStart: (item, edge, clientY) => handleResizeStart(item, edge, clientY),
                 isResizing: isResizing,
                 conflictUi: conflictUi, // Pass conflict UI state (includes live conflict flag)
+                types: types,
               }}
               getEventsForDay={(dayKey) => {
-                // Get events from store for this day, plus legacy events from scheduledItems
-                const storeEvents = getEventsForDate(dayKey);
+                // Merge new schedule occurrences mapped to calendar items
+                const occs = schedStore.occurrencesForDay(dayKey) || [];
+                const mappedOccs = occs.map((o) => {
+                  const d = new Date(o.start);
+                  const dayStart = new Date(d); dayStart.setHours(START_HOUR, 0, 0, 0);
+                  const startMinutes = Math.max(0, Math.round((d.getTime() - dayStart.getTime()) / 60000));
+                  const duration = Math.max(15, Math.round((o.end - o.start) / 60000));
+                  return {
+                    id: `sched:${o.occId}`,
+                    label: o.taskTitle || `Task ${o.taskId}`,
+                    dateKey: dayKey,
+                    startMinutes,
+                    duration,
+                    typeId: o.typeId != null ? String(o.typeId) : null,
+                  };
+                });
                 const legacyEvents = scheduledItems.filter(item => 
                   item.dateKey === dayKey || (!item.dateKey && dayKey === visibleKeys[0])
                 );
-                return [...storeEvents, ...legacyEvents];
+                return [...mappedOccs, ...legacyEvents];
               }}
               onDropToDay={(day, payload) => {
                 // Cross-day drop handling is done in handleDragEnd via over.data.current.dayKey
