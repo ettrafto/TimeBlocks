@@ -1,6 +1,6 @@
 // src/state/eventsStoreWithBackend.js
 import { formatISO, parseISO, addMinutes } from 'date-fns';
-import { START_HOUR } from '../constants/calendar';
+import { settingsStore } from './settingsStore';
 import { scheduledEventsApi } from '../services/api';
 import { isValidEvent, diagnoseEvents, cleanEvents } from '../utils/eventValidation';
 import { TBLog } from '../../shared/logging/logger.js';
@@ -19,7 +19,10 @@ function keyOf(date) {
 function toBackendEvent(event, calendarId = 'cal_main') {
   // Build local day start at START_HOUR, then add minutes to avoid timezone drift
   const [y, m, d] = String(event.dateKey || formatISO(new Date(), { representation: 'date' })).split('-').map((n) => parseInt(n, 10));
-  const dayStart = new Date(y, (m - 1), d, START_HOUR, 0, 0, 0);
+  const startStr = settingsStore.get().general?.workHours?.start || '09:00';
+  const h = parseInt(startStr.split(':')[0] || '9', 10);
+  const mm = parseInt(startStr.split(':')[1] || '0', 10);
+  const dayStart = new Date(y, (m - 1), d, Number.isFinite(h) ? h : 9, Number.isFinite(mm) ? mm : 0, 0, 0);
   const startDate = addMinutes(dayStart, event.startMinutes || 0);
   const endDate = addMinutes(startDate, event.duration || 30);
 
@@ -36,7 +39,8 @@ function toBackendEvent(event, calendarId = 'cal_main') {
     endUtc: endDate.toISOString(),
     isAllDay: 0,
     recurrenceRule: event.recurrenceRule || null,
-    createdBy: 'u_dev',
+    createdBy: event.createdBy || 'u_dev',
+    createdAtUtc: event.createdAtUtc || new Date().toISOString(),
   };
 }
 
@@ -62,6 +66,8 @@ function fromBackendEvent(backendEvent) {
     typeId: backendEvent.typeId,
     libraryEventId: backendEvent.libraryEventId,
     notes: backendEvent.notes,
+    createdBy: backendEvent.createdBy || 'u_dev',
+    createdAtUtc: backendEvent.createdAtUtc || null,
   };
 }
 

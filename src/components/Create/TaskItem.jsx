@@ -116,7 +116,6 @@ export default function TaskItem({
   onAddSubtask,
   onUpdateSubtaskTitle,
   onRemoveSubtask,
-  onCalendarClick, 
   onClockClick,
   onRemoveTask,
   taskBg,
@@ -244,15 +243,6 @@ export default function TaskItem({
             title="Subtasks"
           >
             <SubTaskIcon />
-          </button>
-          <button
-            onClick={onCalendarClick}
-            className="p-1.5 rounded-md hover:bg-black/5 transition-colors duration-200"
-            style={{ color: textColorStyle }}
-            title="Link to date"
-            aria-label="Link to date"
-          >
-            <CalendarIcon />
           </button>
           <button
             onClick={onClockClick}

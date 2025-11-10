@@ -150,6 +150,8 @@ export const scheduledEventsApi = {
       typeId: event.typeId ?? null,
       taskId: event.taskId ?? null,
       notes: event.color ?? null,
+      createdBy: event.createdBy || 'u_dev',
+      createdAtUtc: event.createdAtUtc || new Date().toISOString(),
     },
   }),
 
@@ -158,6 +160,7 @@ export const scheduledEventsApi = {
     method: 'PUT',
     body: {
       id,
+      calendarId: event.calendarId || CALENDAR_ID,
       title: event.title,
       startUtc: event.startUtc,
       endUtc: event.endUtc,
@@ -166,6 +169,8 @@ export const scheduledEventsApi = {
       typeId: event.typeId ?? null,
       taskId: event.taskId ?? null,
       notes: event.color ?? null,
+      createdBy: event.createdBy || 'u_dev',
+      createdAtUtc: event.createdAtUtc || new Date().toISOString(),
     },
   }),
 

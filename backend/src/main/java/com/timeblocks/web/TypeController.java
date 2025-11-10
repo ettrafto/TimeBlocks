@@ -3,9 +3,13 @@ package com.timeblocks.web;
 import com.timeblocks.logging.TBLog;
 import com.timeblocks.model.Type;
 import com.timeblocks.repo.TypeRepository;
+import com.timeblocks.repo.TaskRepository;
+import com.timeblocks.repo.SubtaskRepository;
+import com.timeblocks.repo.EventRepository;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.HashMap;
 import java.util.List;
@@ -15,9 +19,18 @@ import java.util.Map;
 @RequestMapping("/api")
 public class TypeController {
     private final TypeRepository typeRepo;
+    private final TaskRepository taskRepo;
+    private final SubtaskRepository subtaskRepo;
+    private final EventRepository eventRepo;
 
-    public TypeController(TypeRepository typeRepo) {
+    public TypeController(TypeRepository typeRepo,
+                          TaskRepository taskRepo,
+                          SubtaskRepository subtaskRepo,
+                          EventRepository eventRepo) {
         this.typeRepo = typeRepo;
+        this.taskRepo = taskRepo;
+        this.subtaskRepo = subtaskRepo;
+        this.eventRepo = eventRepo;
     }
 
     @GetMapping("/types")
@@ -99,6 +112,7 @@ public class TypeController {
     }
 
     @DeleteMapping("/types/{id}")
+    @Transactional
     public ResponseEntity<Map<String, Boolean>> deleteType(@PathVariable Integer id) {
         String cid = TBLog.getCorrelationId();
         TBLog.groupStart("DELETE /api/types/{id}", cid);
@@ -111,9 +125,31 @@ public class TypeController {
                 TBLog.warn("Type not found for deletion: {}", id);
                 return ResponseEntity.notFound().build();
             }
+
+            // Load task ids linked to this type
+            List<Integer> taskIds = taskRepo.findIdsByTypeId(id);
+            TBLog.kv("tasks.for.type", Map.of("typeId", id, "count", taskIds.size()));
+
+            if (!taskIds.isEmpty()) {
+                try {
+                    subtaskRepo.deleteByTaskIds(taskIds);
+                    TBLog.kv("subtasks.deleted", Map.of("count", taskIds.size()));
+                } catch (Exception e) {
+                    TBLog.warn("Failed deleting subtasks for tasks {}: {}", taskIds, e.getMessage());
+                }
+                try {
+                    for (Integer taskId : taskIds) {
+                        eventRepo.deleteByTaskId(String.valueOf(taskId));
+                    }
+                } catch (Exception e) {
+                    TBLog.warn("Failed deleting events for tasks {}: {}", taskIds, e.getMessage());
+                }
+                taskRepo.deleteByTypeId(id);
+                TBLog.kv("tasks.deleted", Map.of("count", taskIds.size()));
+            }
             
             typeRepo.deleteById(id);
-            TBLog.info("Deleted type: {} (cascade will delete tasks/subtasks)", id);
+            TBLog.info("Deleted type: {}", id);
             
             Map<String, Boolean> response = new HashMap<>();
             response.put("ok", true);

@@ -13,6 +13,7 @@ export function createDateState(initialDate = new Date()) {
   let weekStartsOn = 1; // Monday
   let viewMode = 'day'; // 'day' | '3day' | 'week'
   let includeWeekends = false; // default: exclude weekends
+  let workDays = ['Mon','Tue','Wed','Thu','Fri'];
   
   // Cache the state object to avoid infinite loops in useSyncExternalStore
   let cachedState = { selectedDate, weekStartsOn, viewMode, includeWeekends };
@@ -61,6 +62,19 @@ export function createDateState(initialDate = new Date()) {
     includeWeekends = !!flag;
     selectedDate = clampToWeekday(selectedDate);
     cachedState = { selectedDate, weekStartsOn, viewMode, includeWeekends };
+  };
+
+  const setWeekStartsOn = (n) => {
+    weekStartsOn = n === 0 ? 0 : 1;
+    cachedState = { selectedDate, weekStartsOn, viewMode, includeWeekends };
+  };
+
+  const setWorkDays = (days) => {
+    workDays = Array.isArray(days) ? days : workDays;
+    // If both weekend days are present, include weekends
+    const hasSat = workDays.includes('Sat');
+    const hasSun = workDays.includes('Sun');
+    setIncludeWeekends(hasSat && hasSun);
   };
 
   // Window size based on view mode
@@ -131,6 +145,8 @@ export function createDateState(initialDate = new Date()) {
       setDate: (d) => { setDate(d); notify(); },
       setViewMode: (m) => { setViewMode(m); notify(); },
       setIncludeWeekends: (f) => { setIncludeWeekends(f); notify(); },
+      setWeekStartsOn: (n) => { setWeekStartsOn(n); notify(); },
+      setWorkDays: (days) => { setWorkDays(days); notify(); },
       nextWindow: () => { nextWindow(); notify(); },
       prevWindow: () => { prevWindow(); notify(); },
       goToday: () => { goToday(); notify(); },

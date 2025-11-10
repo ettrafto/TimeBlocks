@@ -18,10 +18,17 @@ export const api = {
     correlationId: newCorrelationId("api-update-type")
   }),
   
-  deleteType: (id) => apiRequest(`/api/types/${id}`, {
-    method: "DELETE",
-    correlationId: newCorrelationId("api-delete-type")
-  }),
+  deleteType: (id) => {
+    const numericId = Number(id);
+    if (!Number.isFinite(numericId)) {
+      console.info('[createPageApi] skip delete for non-persisted type', id);
+      return Promise.resolve({ ok: true, skipped: true });
+    }
+    return apiRequest(`/api/types/${numericId}`, {
+      method: "DELETE",
+      correlationId: newCorrelationId("api-delete-type")
+    });
+  },
   
   // Tasks
   listTasksByType: (typeId) => apiRequest(`/api/tasks?typeId=${typeId}`, {

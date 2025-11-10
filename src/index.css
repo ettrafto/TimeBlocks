@@ -2,6 +2,174 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Theming variables */
+:root {
+  --bg: #f9fafb;           /* gray-50 */
+  --surface: #ffffff;      /* white */
+  --surface-alt: #f3f4f6;  /* gray-100 */
+  --border: #e5e7eb;       /* gray-200 */
+  --text: #111827;         /* gray-900 */
+  --text-muted: #4b5563;   /* gray-600 */
+  --nav-bg: #111827;       /* neutral-900 */
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+/* Dark mode */
+.dark {
+  color-scheme: dark;
+  --bg: #0f172a;           /* slate-900 */
+  --surface: #111827;      /* slate-800 */
+  --surface-alt: #1f2937;  /* slate-700 */
+  --border: #1f2937;
+  --text: #f8fafc;         /* slate-50 */
+  --text-muted: #cbd5f5;   /* lighter slate */
+  --nav-bg: #020617;       /* navy */
+}
+
+/* Ocean: teal + navy */
+.theme-ocean {
+  --bg: #f0fdfa;           /* teal-50 */
+  --surface: #ecfeff;      /* cyan-50 */
+  --surface-alt: #cffafe;  /* cyan-100 */
+  --border: #99f6e4;
+  --text: #0f172a;         /* slate-900 */
+  --text-muted: #334155;   /* slate-700 */
+  --nav-bg: #0f766e;       /* teal-600 */
+}
+
+/* Forest: greens and warm surfaces */
+.theme-forest {
+  --bg: #f0fdf4;           /* green-50 */
+  --surface: #fefce8;      /* yellow-50 */
+  --surface-alt: #dcfce7;  /* green-100 */
+  --border: #bbf7d0;
+  --text: #052e16;         /* green-950 */
+  --text-muted: #166534;   /* green-700 */
+  --nav-bg: #065f46;       /* emerald-700 */
+}
+
+/* Sunset: oranges + rose */
+.theme-sunset {
+  --bg: #fff7ed;           /* orange-50 */
+  --surface: #fff1f2;      /* rose-50 */
+  --surface-alt: #ffedd5;  /* orange-100 */
+  --border: #fecdd3;
+  --text: #3f1d0f;         /* custom deep brown */
+  --text-muted: #9a3412;   /* orange-700 */
+  --nav-bg: #ea580c;       /* orange-600 */
+}
+
+/* Slate: cool gray/blue */
+.theme-slate {
+  --bg: #f1f5f9;           /* slate-100 */
+  --surface: #e2e8f0;      /* slate-200 */
+  --surface-alt: #cbd5e1;  /* slate-300 */
+  --border: #cbd5e1;
+  --text: #0f172a;         /* slate-900 */
+  --text-muted: #475569;   /* slate-600 */
+  --nav-bg: #1e293b;       /* slate-800 */
+}
+
+/* High Contrast: black + yellow */
+.theme-contrast {
+  --bg: #000000;
+  --surface: #0a0a0a;
+  --surface-alt: #111111;
+  --border: #1c1917;
+  --text: #fef08a;         /* yellow-200 */
+  --text-muted: #fde047;   /* yellow-300 */
+  --nav-bg: #111111;
+}
+
+/* Apply variables to common surfaces */
+.theme-ocean .bg-gray-50,
+.theme-forest .bg-gray-50,
+.theme-sunset .bg-gray-50,
+.theme-slate .bg-gray-50,
+.theme-contrast .bg-gray-50,
+.dark .bg-gray-50 {
+  background-color: var(--bg) !important;
+}
+
+.theme-ocean .bg-white,
+.theme-forest .bg-white,
+.theme-sunset .bg-white,
+.theme-slate .bg-white,
+.theme-contrast .bg-white,
+.dark .bg-white {
+  background-color: var(--surface) !important;
+}
+
+.dark .bg-gray-100,
+.dark .bg-gray-200,
+.dark .bg-slate-100 {
+  background-color: var(--surface-alt) !important;
+}
+
+.theme-ocean .text-gray-800,
+.theme-forest .text-gray-800,
+.theme-sunset .text-gray-800,
+.theme-slate .text-gray-800,
+.theme-contrast .text-gray-800,
+.dark .text-gray-800 {
+  color: var(--text) !important;
+}
+
+.theme-ocean .text-gray-700,
+.theme-forest .text-gray-700,
+.theme-sunset .text-gray-700,
+.theme-slate .text-gray-700,
+.theme-contrast .text-gray-700,
+.theme-ocean .text-gray-600,
+.theme-forest .text-gray-600,
+.theme-sunset .text-gray-600,
+.theme-slate .text-gray-600,
+.theme-contrast .text-gray-600,
+.dark .text-gray-500,
+.dark .text-gray-700,
+.dark .text-gray-600 {
+  color: var(--text-muted) !important;
+}
+
+.theme-ocean .bg-neutral-900,
+.theme-forest .bg-neutral-900,
+.theme-sunset .bg-neutral-900,
+.theme-slate .bg-neutral-900,
+.theme-contrast .bg-neutral-900,
+.dark .bg-neutral-900 {
+  background-color: var(--nav-bg) !important;
+}
+
+.dark .border-gray-200,
+.dark .border-gray-100,
+.dark .border-gray-300 {
+  border-color: var(--border) !important;
+}
+
+.dark .shadow-lg,
+.dark .shadow-md,
+.dark .shadow-sm {
+  box-shadow: 0 10px 30px -12px rgba(15, 23, 42, 0.55) !important;
+}
+
+.dark .ring-gray-200 {
+  --tw-ring-color: rgba(148, 163, 184, 0.35) !important;
+}
+
+.dark input,
+.dark select,
+.dark textarea {
+  background-color: var(--surface-alt) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+
+
 /* Sidebar CSS variables and smooth resize system */
 :root {
   --sidebar-w: 320px; /* initial width */

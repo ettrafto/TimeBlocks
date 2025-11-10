@@ -142,7 +142,7 @@ export default function TypeSection({ typeEntity }) {
         onConfirm={async (t) => {
           try {
             await useTypesStore.getState().remove(t.id);
-            try { await removeTypeCreate?.(t.id); } catch {}
+            try { await removeTypeCreate?.(t.id, { skipApi: true }); } catch {}
           } catch (e) {
             console.warn('Failed to delete type', e);
           } finally {

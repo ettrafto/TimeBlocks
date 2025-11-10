@@ -144,17 +144,7 @@ export default function CreatePage() {
     handleToggleSubtasks(projectId, taskId);
   };
 
-  const handleCalendarClick = async (projectId, taskId) => {
-    // Attach task to currently selected day (no scheduled event creation)
-    try {
-      const { utils, get } = (await import('../state/dateStore')).dateStore; // dynamic import safe in Vite
-      const key = utils.getDateKey(get().selectedDate);
-      console.log('[CreatePage] Attach to day', { taskId, dateKey: key });
-      await updateTask(taskId, { attached_date: key });
-    } catch (e) {
-      console.warn('[CreatePage] Failed to attach task to day', e);
-    }
-  };
+  // Link-to-date removed
 
   const handleClockClick = (projectId, taskId) => {
     // Placeholder for future time assignment
@@ -184,7 +174,6 @@ export default function CreatePage() {
               onAddSubtask={handleAddSubtask}
               onUpdateSubtaskTitle={handleUpdateSubtaskTitle}
               onRemoveSubtask={handleRemoveSubtask}
-              onCalendarClick={handleCalendarClick}
               onClockClick={handleClockClick}
               onRemoveTask={handleRemoveTask}
               onProjectChange={handleProjectChange}
@@ -196,4 +185,7 @@ export default function CreatePage() {
     </div>
   );
 }
+
+// Also export a named version for environments that fail default detection
+export { CreatePage };
 

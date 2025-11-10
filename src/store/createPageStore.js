@@ -70,9 +70,11 @@ const useCreatePageStore = create((set, get) => ({
     }
   },
 
-  removeType: async (id) => {
+  removeType: async (id, opts = {}) => {
     try {
-      await api.deleteType(id);
+      if (!opts.skipApi) {
+        await api.deleteType(id);
+      }
       set((s) => {
         const { [id]: _, ...rest } = s.tasksByType;
         return { 

@@ -40,7 +40,12 @@ export const typesClient = {
     return validateType(row);
   },
   async deleteType(id, signal) {
-    await http(`/api/types/${encodeURIComponent(id)}`, { method: 'DELETE', signal });
+    const numericId = Number(id);
+    if (!Number.isFinite(numericId)) {
+      log.info(['API','types','delete'], 'skipping backend delete for non-persisted type', { id });
+      return { ok: true, skipped: true };
+    }
+    await http(`/api/types/${encodeURIComponent(numericId)}`, { method: 'DELETE', signal });
     return { ok: true };
   },
 };

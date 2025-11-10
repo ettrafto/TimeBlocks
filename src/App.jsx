@@ -29,6 +29,9 @@ import {
 } from '@dnd-kit/core';
 import { restrictToWindowEdges } from '@dnd-kit/modifiers';
 import { format, formatISO, parseISO, differenceInMinutes } from 'date-fns';
+import { settingsStore } from './state/settingsStore';
+import { formatClock, parseHourMinute } from './utils/dateFormat';
+import { log } from './lib/logger';
 import { dateStore } from './state/dateStore';
 import { eventsStore } from './state/eventsStoreWithBackend';
 import { uiStore } from './state/uiStore';
@@ -40,7 +43,7 @@ import SidebarEvents from './components/Sidebar/SidebarEvents';
 import { arrayMove } from './utils/dnd';
 import { useTypesStore } from './state/typesStore';
 import TopNav from './components/TopNav';
-import CreatePage from './pages/CreatePage';
+import CreatePage from './pages/CreatePage.jsx';
 import DiagnosticsPage from './pages/DiagnosticsPage';
 import { computeEventLayout } from './utils/overlap';
 import BackendTest from './pages/BackendTest';
@@ -109,10 +112,31 @@ const COLOR_OPTIONS = [
   { name: 'Cyan', value: 'bg-cyan-500' },
 ];
 
-// Calendar configuration
-const START_HOUR = 8; // 8 AM
-const END_HOUR = 17; // 5 PM
+// Calendar configuration (dynamic via settings)
 const MINUTES_PER_SLOT = 15;
+let START_HOUR_DYN = 8;
+let END_HOUR_DYN = 17;
+let TIME_FORMAT_DYN = '12h';
+
+function refreshCalendarFromSettings() {
+  try {
+    const s = settingsStore.get();
+    const wh = s.general?.workHours || { start: '09:00', end: '17:00' };
+    const { hour: sh } = parseHourMinute(wh.start);
+    const { hour: eh } = parseHourMinute(wh.end);
+    if (Number.isFinite(sh) && Number.isFinite(eh) && eh > sh) {
+      START_HOUR_DYN = sh;
+      END_HOUR_DYN = eh;
+    } else {
+      log.warn(['Settings','Apply'], 'invalid work hours, fallback 9-17', wh);
+      START_HOUR_DYN = 9;
+      END_HOUR_DYN = 17;
+    }
+    TIME_FORMAT_DYN = s.general?.timeFormat === '24h' ? '24h' : '12h';
+    log.info(['Settings','Apply'], 'calendar hours updated', { start: START_HOUR_DYN, end: END_HOUR_DYN, fmt: TIME_FORMAT_DYN });
+  } catch {}
+}
+refreshCalendarFromSettings();
 
 // Default zoom level
 const DEFAULT_PIXELS_PER_SLOT = 20; // 20px per 15-minute slot
@@ -147,7 +171,7 @@ function snapToIncrement(minutes) {
 
 // Clamp minutes to calendar day bounds (0 to total calendar minutes)
 function clampMinutesToDay(m) {
-  const total = (END_HOUR - START_HOUR) * 60;
+  const total = (END_HOUR_DYN - START_HOUR_DYN) * 60;
   return Math.max(0, Math.min(m, total));
 }
 
@@ -346,20 +370,16 @@ function listConflicts(allEvents, candidate, excludeId = null) {
 
 // Format minutes to time string (e.g., "9:30 AM")
 function formatTime(totalMinutes) {
-  const hour = Math.floor(totalMinutes / 60) + START_HOUR;
-  const minute = totalMinutes % 60;
-  const period = hour >= 12 ? 'PM' : 'AM';
-  const displayHour = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
-  return `${displayHour}:${minute.toString().padStart(2, '0')} ${period}`;
+  return formatClock(totalMinutes, { startHour: START_HOUR_DYN, timeFormat: TIME_FORMAT_DYN });
 }
 
 // Generate time slots for the calendar
 function generateTimeSlots() {
   const slots = [];
-  const totalMinutes = (END_HOUR - START_HOUR) * 60;
+  const totalMinutes = (END_HOUR_DYN - START_HOUR_DYN) * 60;
   
   for (let i = 0; i <= totalMinutes; i += MINUTES_PER_SLOT) {
-    const hour = Math.floor(i / 60) + START_HOUR;
+    const hour = Math.floor(i / 60) + START_HOUR_DYN;
     const minute = i % 60;
     const isHour = minute === 0;
     const isHalfHour = minute === 30;
@@ -1453,7 +1473,7 @@ function CalendarGrid({
 }) {
   const timeSlots = generateTimeSlots();
   // Round to integer pixels to prevent sub-pixel jiggle
-  const calendarHeight = Math.round((END_HOUR - START_HOUR) * 60 * (pixelsPerSlot / MINUTES_PER_SLOT));
+  const calendarHeight = Math.round((END_HOUR_DYN - START_HOUR_DYN) * 60 * (pixelsPerSlot / MINUTES_PER_SLOT));
   
   const containerRef = React.useRef(null);
   const [isDragging, setIsDragging] = React.useState(false);
@@ -2157,7 +2177,7 @@ function App() {
           const s = parseISO(o.startUtc);
           const e = parseISO(o.endUtc);
           const dk = formatISO(s, { representation: 'date' });
-          const dayStart = new Date(s); dayStart.setHours(START_HOUR, 0, 0, 0);
+          const dayStart = new Date(s); dayStart.setHours(START_HOUR_DYN, 0, 0, 0);
           const startMin = Math.max(0, differenceInMinutes(s, dayStart));
           const dur = Math.max(15, differenceInMinutes(e, s));
           return {
@@ -2847,7 +2867,7 @@ function App() {
       const offsetY = currentMouseY - rect.top;
       const minutes = pixelsToMinutes(offsetY, pixelsPerSlot);
       const snappedMinutes = snapToIncrement(minutes);
-      const totalMinutes = (END_HOUR - START_HOUR) * 60;
+      const totalMinutes = (END_HOUR_DYN - START_HOUR_DYN) * 60;
       finalMinutes = Math.max(0, Math.min(snappedMinutes, totalMinutes - MINUTES_PER_SLOT));
       taskInfo = activeData.task;
       const dayKeyForGhost = calendarElement.getAttribute('data-day-key') || null;
@@ -2869,7 +2889,7 @@ function App() {
       const snappedMinutes = snapToIncrement(newMinutes);
       
       // Clamp to calendar bounds
-      const totalMinutes = (END_HOUR - START_HOUR) * 60;
+      const totalMinutes = (END_HOUR_DYN - START_HOUR_DYN) * 60;
       finalMinutes = Math.max(0, Math.min(snappedMinutes, totalMinutes - MINUTES_PER_SLOT));
       
       // Create a task-like object from the scheduled item
@@ -2977,8 +2997,8 @@ function App() {
       // ========================================
       
       if (!ghostPosition) {
-        console.warn('⚠️ No ghost position available, using START_HOUR fallback');
-        ghostPosition = { startMinutes: (typeof START_HOUR === 'number' ? START_HOUR : 9) * 60, dayKey: dateKey, task: activeData.task };
+        console.warn('⚠️ No ghost position available, using start hour fallback');
+        ghostPosition = { startMinutes: (typeof START_HOUR_DYN === 'number' ? START_HOUR_DYN : 9) * 60, dayKey: dateKey, task: activeData.task };
       }
       
       const task = activeData.task;
@@ -3018,7 +3038,7 @@ function App() {
       // Prepare backend payload preview (legacy /api/events)
       try {
         const [y,m,d] = (targetDayKey || dateKey).split('-').map(n => parseInt(n,10));
-        const startBase = new Date(y, (m-1), d, START_HOUR, 0, 0, 0);
+        const startBase = new Date(y, (m-1), d, START_HOUR_DYN, 0, 0, 0);
         const startIso = new Date(startBase.getTime() + newItem.startMinutes * 60000).toISOString();
         const endIso = new Date(startBase.getTime() + (newItem.startMinutes + newItem.duration) * 60000).toISOString();
         const previewPayload = {
@@ -3164,7 +3184,7 @@ function App() {
         const newPixels = currentPixels + delta.y;
         const newMinutes = pixelsToMinutes(newPixels, pixelsPerSlot);
         const snappedMinutes = snapToIncrement(newMinutes);
-        const totalMinutes = (END_HOUR - START_HOUR) * 60;
+        const totalMinutes = (END_HOUR_DYN - START_HOUR_DYN) * 60;
         finalMinutes = Math.max(0, Math.min(snappedMinutes, totalMinutes - MINUTES_PER_SLOT));
       }
 
@@ -3297,6 +3317,33 @@ function App() {
   const location = useLocation();
   const navigate = useNavigate();
   const showDiagnostics = import.meta.env.VITE_SHOW_DIAGNOSTICS === 'true';
+  const [settingsVersion, setSettingsVersion] = React.useState(0);
+
+  // Apply settings-driven calendar values and week start/work days
+  React.useEffect(() => {
+    const unsub = settingsStore.subscribe((s) => {
+      const before = { start: START_HOUR_DYN, end: END_HOUR_DYN, fmt: TIME_FORMAT_DYN };
+      refreshCalendarFromSettings();
+      setSettingsVersion((v) => v + 1);
+      try {
+        const ws = s.general?.weekStart === 'Sun' ? 0 : 1;
+        const wd = s.general?.workDays || ['Mon','Tue','Wed','Thu','Fri'];
+        dateStore.actions.setWeekStartsOn(ws);
+        dateStore.actions.setWorkDays(wd);
+        log.info(['Settings','Apply'], 'dateStore updated', { weekStartsOn: ws, workDays: wd });
+      } catch {}
+      log.info(['Settings','Apply'], 'calendar refresh', { before, after: { start: START_HOUR_DYN, end: END_HOUR_DYN, fmt: TIME_FORMAT_DYN } });
+    });
+    // apply once on mount
+    try {
+      const s = settingsStore.get();
+      const ws = s.general?.weekStart === 'Sun' ? 0 : 1;
+      const wd = s.general?.workDays || ['Mon','Tue','Wed','Thu','Fri'];
+      dateStore.actions.setWeekStartsOn(ws);
+      dateStore.actions.setWorkDays(wd);
+    } catch {}
+    return () => { try { unsub?.(); } catch {} };
+  }, []);
 
   // Determine active view from pathname
   const getActiveView = () => {
@@ -3668,7 +3715,7 @@ function App() {
                 const occs = schedStore.occurrencesForDay(dayKey) || [];
                 const mappedOccs = occs.map((o) => {
                   const d = new Date(o.start);
-                  const dayStart = new Date(d); dayStart.setHours(START_HOUR, 0, 0, 0);
+                  const dayStart = new Date(d); dayStart.setHours(START_HOUR_DYN, 0, 0, 0);
                   const startMinutes = Math.max(0, Math.round((d.getTime() - dayStart.getTime()) / 60000));
                   const duration = Math.max(15, Math.round((o.end - o.start) / 60000));
                   return {

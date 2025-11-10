@@ -3,7 +3,7 @@ import ProjectColumn from './ProjectColumn';
 import AddProjectCard from './AddProjectCard';
 import HorizontalScrollbar from './HorizontalScrollbar';
 
-export default function ProjectsView({ projects, onAddProject, onTitleChange, onColorChange, onAddTask, onTaskTitleChange, onSubTaskClick, onToggleSubtasks, onAddSubtask, onUpdateSubtaskTitle, onRemoveSubtask, onCalendarClick, onClockClick, onRemoveTask, onProjectChange }) {
+export default function ProjectsView({ projects, onAddProject, onTitleChange, onColorChange, onAddTask, onTaskTitleChange, onSubTaskClick, onToggleSubtasks, onAddSubtask, onUpdateSubtaskTitle, onRemoveSubtask, onClockClick, onRemoveTask, onProjectChange }) {
   const rowRef = useRef(null);
   const prevProjectsLengthRef = useRef(projects.length);
 
@@ -72,7 +72,6 @@ export default function ProjectsView({ projects, onAddProject, onTitleChange, on
               onAddSubtask={onAddSubtask}
               onUpdateSubtaskTitle={onUpdateSubtaskTitle}
               onRemoveSubtask={onRemoveSubtask}
-              onCalendarClick={onCalendarClick}
               onClockClick={onClockClick}
               onRemoveTask={onRemoveTask}
               onProjectChange={onProjectChange}
