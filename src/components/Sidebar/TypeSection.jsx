@@ -2,11 +2,14 @@ import React, { useMemo, useSyncExternalStore } from 'react';
 import { useDroppable } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import TypeHeader from '../Calendar/TypeHeader.jsx';
+import TypeEditorModal from '../Modals/TypeEditorModal.jsx';
+import TypeDeleteModal from '../Modals/TypeDeleteModal.jsx';
 import { uiStore } from '../../state/uiStore.js';
 import { useCreatePageStore } from '../../store/createPageStore.js';
 import SortableEventRow from './SortableEventRow.jsx';
 import { sortByOrder } from '../../utils/sort.js';
 import { useTypesStore } from '../../state/typesStore.js';
+import TaskEditorModal from '../Modals/TaskEditorModal.jsx';
 
 const PlusIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
@@ -30,8 +33,11 @@ export default function TypeSection({ typeEntity }) {
   const toggle = () => uiStore.toggleCollapsed(String(typeEntity.id));
   const order = ui.eventOrderByType?.[String(typeEntity.id)] || [];
 
-  const { tasksByType, addTask } = useCreatePageStore();
+  const { tasksByType, addTask, updateType: updateTypeCreate, removeType: removeTypeCreate } = useCreatePageStore();
   const { update: updateType } = useTypesStore.getState ? useTypesStore : { update: null };
+  const [showTypeEditor, setShowTypeEditor] = React.useState(false);
+  const [showTaskCreate, setShowTaskCreate] = React.useState(false);
+  const [showTypeDelete, setShowTypeDelete] = React.useState(false);
   const raw = tasksByType?.[typeEntity.id] || [];
   const events = useMemo(() => sortByOrder(raw, order), [raw, order]);
 
@@ -44,9 +50,26 @@ export default function TypeSection({ typeEntity }) {
           collapsed={collapsed}
           onToggle={toggle}
           onChangeColor={(hex) => {
+            console.log('[TypeSection] onChangeColor', { id: typeEntity.id, newHex: hex });
             // persist color to types store/backend
             try { useTypesStore.getState().update(typeEntity.id, { color: hex }); } catch {}
+            // mirror to create page store so Create page reflects immediately
+            try {
+              // optimistic local update for Create store
+              useCreatePageStore.setState((s) => {
+                const next = {
+                types: (s.types || []).map(t =>
+                  t.id === typeEntity.id ? { ...t, color: hex } : t
+                )
+              };
+                console.log('[TypeSection] createPageStore.types updated (optimistic)', next.types.find(t => t.id === typeEntity.id));
+                return next;
+              });
+            } catch {}
+            try { updateTypeCreate?.(typeEntity.id, { color: hex }); } catch (e) { console.warn('[TypeSection] updateType (persist) failed', e); }
           }}
+          onEdit={() => setShowTypeEditor(true)}
+          onDelete={() => setShowTypeDelete(true)}
         />
       </div>
       {!collapsed && (
@@ -63,7 +86,7 @@ export default function TypeSection({ typeEntity }) {
           </SortableContext>
           <div className="mt-2">
             <button
-              onClick={() => addTask({ type_id: parseInt(typeEntity.id, 10), title: 'New event' })}
+              onClick={() => setShowTaskCreate(true)}
               className="w-full py-2 px-3 text-sm font-medium rounded-xl border-2 border-dashed transition-all duration-200 flex items-center justify-center gap-2 shrink-0 border-gray-300 text-gray-600 bg-transparent hover:bg-gray-50"
               title="Add event"
             >
@@ -74,6 +97,59 @@ export default function TypeSection({ typeEntity }) {
         </div>
       )}
       {collapsed && null}
+      <TaskEditorModal
+        isOpen={showTaskCreate}
+        task={{ id: null, title: '', type_id: Number(typeEntity.id) }}
+        types={useTypesStore().items || []}
+        onCancel={() => setShowTaskCreate(false)}
+        onSave={async ({ title, type_id }) => {
+          await addTask({ type_id: Number(type_id ?? typeEntity.id), title });
+          setShowTaskCreate(false);
+        }}
+      />
+      <TypeEditorModal
+        isOpen={showTypeEditor}
+        type={{ id: typeEntity.id, name: typeEntity.name, color: typeEntity.color }}
+        onCancel={() => setShowTypeEditor(false)}
+        onSave={async ({ id, name, color }) => {
+          console.log('[TypeSection] TypeEditorModal onSave', { id, name, color });
+          try {
+            await useTypesStore.getState().update(id, { name, color });
+            // keep Create page store in sync
+            try {
+              // optimistic local update
+              useCreatePageStore.setState((s) => {
+                const next = {
+                types: (s.types || []).map(t =>
+                  t.id === id ? { ...t, name, color } : t
+                )
+              };
+                console.log('[TypeSection] createPageStore.types updated (optimistic)', next.types.find(t => t.id === id));
+                return next;
+              });
+            } catch {}
+            try { await updateTypeCreate?.(id, { name, color }); } catch (e) { console.warn('[TypeSection] updateType (persist) failed', e); }
+          } catch (e) {
+            console.warn('Failed to update type', e);
+          }
+          setShowTypeEditor(false);
+        }}
+      />
+      <TypeDeleteModal
+        isOpen={showTypeDelete}
+        type={{ id: typeEntity.id, name: typeEntity.name }}
+        onCancel={() => setShowTypeDelete(false)}
+        onConfirm={async (t) => {
+          try {
+            await useTypesStore.getState().remove(t.id);
+            try { await removeTypeCreate?.(t.id); } catch {}
+          } catch (e) {
+            console.warn('Failed to delete type', e);
+          } finally {
+            setShowTypeDelete(false);
+          }
+        }}
+      />
     </section>
   );
 }

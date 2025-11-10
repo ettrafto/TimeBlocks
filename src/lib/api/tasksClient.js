@@ -9,12 +9,18 @@ function validateTask(row) {
   if (type_id == null) return null;
   const title = typeof row.title === 'string' ? row.title
     : (typeof row.name === 'string' ? row.name : '');
+  const duration = Number.isFinite(Number(row.duration)) ? Number(row.duration) : undefined;
+  const attached_date = typeof row.attached_date === 'string'
+    ? row.attached_date
+    : (typeof row.attachedDate === 'string' ? row.attachedDate : null);
   return {
     id: row.id,
     type_id,
     title,
     description: typeof row.description === 'string' ? row.description : null,
     status: typeof row.status === 'string' ? row.status : null,
+    duration,
+    attached_date,
   };
 }
 

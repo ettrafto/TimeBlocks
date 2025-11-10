@@ -1,9 +1,11 @@
 import React, { useEffect } from 'react';
+import { useDroppable } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { uiStore } from '../../state/uiStore.js';
 import { useTypesStore, useTypesOrdered } from '../../state/typesStore.js';
 import SortableTypeSection from './SortableTypeSection.jsx';
 import { useCreatePageStore } from '../../store/createPageStore.js';
+import TypeCreateModal from '../Modals/TypeCreateModal.jsx';
 
 const PlusIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
@@ -16,6 +18,13 @@ export default function SidebarEvents() {
   const ordered = useTypesOrdered();
   const typeOrder = uiStore.get().typeOrder || [];
   const { init } = useCreatePageStore();
+  const [showCreateType, setShowCreateType] = React.useState(false);
+
+  // Make the entire left menu a drop zone
+  const { setNodeRef, isOver } = useDroppable({
+    id: 'left-sidebar',
+    data: { kind: 'left-sidebar' },
+  });
 
   useEffect(() => { 
     loadAll({ force: false }); 
@@ -26,7 +35,12 @@ export default function SidebarEvents() {
   const idsForDnd = typeOrder.length ? typeOrder.map(String) : ordered.map(t => String(t.id));
 
   return (
-    <div className="p-4">
+    <div
+      ref={setNodeRef}
+      className={`p-4 rounded-lg transition-colors ${isOver ? 'ring-2 ring-blue-400/60 bg-blue-50/70' : ''}`}
+      data-droppable-id="left-sidebar"
+      aria-label="Left menu drop zone"
+    >
       {loading ? (
         <div className="bg-white rounded-lg shadow p-6 text-center text-gray-500">Loading types...</div>
       ) : error ? (
@@ -42,13 +56,7 @@ export default function SidebarEvents() {
           </SortableContext>
           <div className="mt-3">
             <button
-              onClick={async () => {
-                const name = prompt('Type name', '')?.trim();
-                if (!name) return;
-                // optional color prompt with default
-                const color = prompt('Hex color (optional, e.g. #2563eb)', '#2563eb') || '#2563eb';
-                await createType({ name, color });
-              }}
+              onClick={() => setShowCreateType(true)}
               className="w-full py-2 px-3 text-sm font-medium rounded-xl border-2 border-dashed transition-all duration-200 flex items-center justify-center gap-2 shrink-0 border-gray-300 text-gray-600 bg-transparent hover:bg-gray-50"
               title="Add Type"
             >
@@ -56,6 +64,14 @@ export default function SidebarEvents() {
               <span>Add Type</span>
             </button>
           </div>
+          <TypeCreateModal
+            isOpen={showCreateType}
+            onCancel={() => setShowCreateType(false)}
+            onSave={async ({ name, color }) => {
+              await createType({ name, color });
+              setShowCreateType(false);
+            }}
+          />
         </>
       )}
     </div>

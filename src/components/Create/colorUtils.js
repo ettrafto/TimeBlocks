@@ -102,6 +102,9 @@ const TAILWIND_TO_HEX = {
  * @returns {string} Hex color
  */
 export function tailwindToHex(tailwindClass) {
+  if (typeof tailwindClass === 'string' && tailwindClass.startsWith('#')) {
+    return tailwindClass;
+  }
   return TAILWIND_TO_HEX[tailwindClass] || TAILWIND_TO_HEX['bg-blue-500'];
 }
 

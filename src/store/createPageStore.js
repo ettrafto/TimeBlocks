@@ -6,13 +6,18 @@ import { tasksClient } from "../lib/api/tasksClient.js";
 function normalizeTask(row) {
   if (!row) return row;
   const type_id = row.type_id != null ? row.type_id : (row.typeId != null ? row.typeId : null);
-  return { ...row, type_id };
+  // Preserve attached date under a consistent snake_case key
+  const attached_date = typeof row.attached_date === 'string'
+    ? row.attached_date
+    : (typeof row.attachedDate === 'string' ? row.attachedDate : null);
+  return { ...row, type_id, attached_date };
 }
 
 const useCreatePageStore = create((set, get) => ({
   types: [],
   tasksByType: {},
   subtasksByTask: {},
+  _loadingSubtasks: {},
   loading: false,
 
   init: async () => {
@@ -97,7 +102,15 @@ const useCreatePageStore = create((set, get) => ({
 
   updateTask: async (id, p) => {
     try {
-      const updated = normalizeTask(await tasksClient.updateTask(id, p));
+      const updatedFromApi = await tasksClient.updateTask(id, p);
+      // Some backends may omit duration or certain fields in PATCH responses; preserve requested values
+      const updated = normalizeTask({
+        ...updatedFromApi,
+        ...(p.duration != null ? { duration: Number(p.duration) } : {}),
+        ...(p.title != null ? { title: p.title } : {}),
+        ...(p.attached_date != null ? { attached_date: p.attached_date } : {}),
+      });
+      console.log('[createPageStore.updateTask] updated', { id, p, updated });
       set((s) => {
         // Find old type_id
         let oldTypeId = null;
@@ -143,7 +156,11 @@ const useCreatePageStore = create((set, get) => ({
   },
 
   // Subtask CRUD
-  loadSubtasks: async (taskId) => {
+  loadSubtasks: async (taskId, { force = false } = {}) => {
+    const s0 = get();
+    if (!force && Array.isArray(s0.subtasksByTask[taskId]) && s0.subtasksByTask[taskId].length > 0) return;
+    if (s0._loadingSubtasks[taskId]) return;
+    set((s) => ({ _loadingSubtasks: { ...(s._loadingSubtasks || {}), [taskId]: true } }));
     try {
       const rows = await api.listSubtasks(taskId);
       set((s) => ({ 
@@ -151,7 +168,12 @@ const useCreatePageStore = create((set, get) => ({
       }));
     } catch (error) {
       console.error("Failed to load subtasks:", error);
-      throw error;
+    } finally {
+      set((s) => {
+        const next = { ...(s._loadingSubtasks || {}) };
+        delete next[taskId];
+        return { _loadingSubtasks: next };
+      });
     }
   },
 

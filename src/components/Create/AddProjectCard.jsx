@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { COLOR_OPTIONS } from '../../constants/colors';
 
 // Plus icon
 const PlusIcon = () => (
@@ -7,23 +8,12 @@ const PlusIcon = () => (
   </svg>
 );
 
-const COLOR_OPTIONS = [
-  { name: 'Blue', value: 'bg-blue-500', hex: '#3b82f6' },
-  { name: 'Purple', value: 'bg-purple-500', hex: '#a855f7' },
-  { name: 'Green', value: 'bg-green-500', hex: '#22c55e' },
-  { name: 'Orange', value: 'bg-orange-500', hex: '#f97316' },
-  { name: 'Red', value: 'bg-red-500', hex: '#ef4444' },
-  { name: 'Yellow', value: 'bg-yellow-500', hex: '#eab308' },
-  { name: 'Pink', value: 'bg-pink-500', hex: '#ec4899' },
-  { name: 'Indigo', value: 'bg-indigo-500', hex: '#6366f1' },
-  { name: 'Teal', value: 'bg-teal-500', hex: '#14b8a6' },
-  { name: 'Cyan', value: 'bg-cyan-500', hex: '#06b6d4' },
-];
+// Use shared calendar palette site-wide
 
 export default function AddProjectCard({ onCreate }) {
   const [isOpen, setIsOpen] = useState(false);
   const [title, setTitle] = useState('');
-  const [selectedColor, setSelectedColor] = useState(COLOR_OPTIONS[0].value);
+  const [selectedColor, setSelectedColor] = useState(COLOR_OPTIONS[0].hex);
   const modalRef = useRef(null);
   const titleInputRef = useRef(null);
 
@@ -33,7 +23,7 @@ export default function AddProjectCard({ onCreate }) {
       if (modalRef.current && !modalRef.current.contains(event.target)) {
         setIsOpen(false);
         setTitle('');
-        setSelectedColor(COLOR_OPTIONS[0].value);
+        setSelectedColor(COLOR_OPTIONS[0].hex);
       }
     }
 
@@ -58,20 +48,20 @@ export default function AddProjectCard({ onCreate }) {
     if (e.key === 'Escape') {
       setIsOpen(false);
       setTitle('');
-      setSelectedColor(COLOR_OPTIONS[0].value);
+      setSelectedColor(COLOR_OPTIONS[0].hex);
     }
   };
 
   const handleCreate = () => {
     if (title.trim()) {
-      const colorOption = COLOR_OPTIONS.find(c => c.value === selectedColor) || COLOR_OPTIONS[0];
+      const colorOption = COLOR_OPTIONS.find(c => c.hex === selectedColor) || COLOR_OPTIONS[0];
       onCreate({
         title: title.trim(),
-        color: colorOption.value,
+        color: colorOption.hex,
       });
       setIsOpen(false);
       setTitle('');
-      setSelectedColor(COLOR_OPTIONS[0].value);
+      setSelectedColor(COLOR_OPTIONS[0].hex);
     }
   };
 
@@ -105,7 +95,7 @@ export default function AddProjectCard({ onCreate }) {
             if (e.target === e.currentTarget) {
               setIsOpen(false);
               setTitle('');
-              setSelectedColor(COLOR_OPTIONS[0].value);
+              setSelectedColor(COLOR_OPTIONS[0].hex);
             }
           }}
           onKeyDown={handleModalKeyDown}
@@ -142,13 +132,14 @@ export default function AddProjectCard({ onCreate }) {
                   {COLOR_OPTIONS.map((color) => (
                     <button
                       key={color.value}
-                      onClick={() => setSelectedColor(color.value)}
+                      onClick={() => setSelectedColor(color.hex)}
                       className={`
-                        w-10 h-10 rounded-full ${color.value}
-                        border-2 ${selectedColor === color.value ? 'border-gray-800' : 'border-white'}
+                        w-10 h-10 rounded-full
+                        border-2 ${selectedColor === color.hex ? 'border-gray-800' : 'border-white'}
                         hover:scale-110 transition-transform duration-200
                         focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2
                       `}
+                      style={{ background: color.hex }}
                       title={color.name}
                       aria-label={`Select ${color.name} color`}
                     />
@@ -162,7 +153,7 @@ export default function AddProjectCard({ onCreate }) {
                 onClick={() => {
                   setIsOpen(false);
                   setTitle('');
-                  setSelectedColor(COLOR_OPTIONS[0].value);
+                  setSelectedColor(COLOR_OPTIONS[0].hex);
                 }}
                 className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
               >

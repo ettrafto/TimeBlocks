@@ -13,6 +13,8 @@ export default function EventEditorModal({ isOpen, editingEvent, onSave, onCance
 
   // Populate form when editing
   React.useEffect(() => {
+    // Initialize form values when opening or when the editing target changes
+    if (!isOpen) return;
     if (editingEvent) {
       setName(editingEvent.name || '');
       setDuration(editingEvent.duration || 30);
@@ -25,7 +27,7 @@ export default function EventEditorModal({ isOpen, editingEvent, onSave, onCance
       setColor('bg-blue-500');
       setTypeId('');
     }
-  }, [editingEvent, isOpen]);
+  }, [isOpen, editingEvent?.id]);
 
   const handleSubmit = (e) => {
     e.preventDefault();

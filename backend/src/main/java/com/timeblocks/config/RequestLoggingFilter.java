@@ -39,7 +39,14 @@ public class RequestLoggingFilter implements Filter {
             String path = req.getRequestURI() + query;
             
             // Log request method, path, duration, and status
-            log.info("➡ {} {} [{}ms] status={} [cid:{}]", req.getMethod(), path, ms, status, correlationId);
+            // Reduce noise for high-frequency endpoints (e.g., /api/subtasks)
+            if (path.startsWith("/api/subtasks")) {
+                if (log.isDebugEnabled()) {
+                    log.debug("➡ {} {} [{}ms] status={} [cid:{}]", req.getMethod(), path, ms, status, correlationId);
+                }
+            } else {
+                log.info("➡ {} {} [{}ms] status={} [cid:{}]", req.getMethod(), path, ms, status, correlationId);
+            }
             
             // Clear MDC for this thread
             TBLog.clearCorrelationId();

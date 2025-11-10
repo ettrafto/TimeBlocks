@@ -6,6 +6,10 @@ import ProjectHeader from './ProjectHeader';
 import TaskItem from './TaskItem';
 import { tailwindToHex, hexToHsl, hslToString, withSaturation, withLightness, readableTextOn } from './colorUtils';
 import { useCommonSensors, arrayMove } from '../../utils/dnd';
+import DurationEditorModal from '../Modals/DurationEditorModal.jsx';
+import { useCreatePageStore } from '../../store/createPageStore.js';
+import AttachDateModal from '../Modals/AttachDateModal.jsx';
+import { formatISO } from 'date-fns';
 
 // Plus icon for Add Task button
 const PlusIcon = () => (
@@ -30,6 +34,24 @@ export default function ProjectColumn({ project, onTitleChange, onColorChange, o
   const taskText = readableTextOn(taskHsl);
 
   const sensors = useCommonSensors();
+  const { updateTask } = useCreatePageStore();
+  const [durationTaskId, setDurationTaskId] = React.useState(null);
+  const openDuration = (taskId) => setDurationTaskId(taskId);
+  const closeDuration = () => setDurationTaskId(null);
+  const currentDuration = React.useMemo(() => {
+    if (durationTaskId == null) return 30;
+    const t = project.tasks.find(t => t.id === durationTaskId);
+    return Number.isFinite(Number(t?.duration)) ? Number(t.duration) : 30;
+  }, [durationTaskId, project.tasks]);
+
+  // Attach date modal
+  const [attachTaskId, setAttachTaskId] = React.useState(null);
+  const [attachInitialDate, setAttachInitialDate] = React.useState(new Date());
+  const openAttach = (taskId) => {
+    setAttachTaskId(taskId);
+    setAttachInitialDate(new Date());
+  };
+  const closeAttach = () => setAttachTaskId(null);
 
   const onTaskDragEnd = (e) => {
     const { active, over } = e;
@@ -80,8 +102,8 @@ export default function ProjectColumn({ project, onTitleChange, onColorChange, o
                     onAddSubtask={() => onAddSubtask(project.id, task.id)}
                     onUpdateSubtaskTitle={(subtaskId, newTitle) => onUpdateSubtaskTitle(project.id, task.id, subtaskId, newTitle)}
                     onRemoveSubtask={(subtaskId) => onRemoveSubtask(project.id, task.id, subtaskId)}
-                    onCalendarClick={() => onCalendarClick(project.id, task.id)}
-                    onClockClick={() => onClockClick(project.id, task.id)}
+                    onCalendarClick={() => openAttach(task.id)}
+                    onClockClick={() => openDuration(task.id)}
                     onRemoveTask={() => onRemoveTask(project.id, task.id)}
                     taskBg={taskBg}
                     textColor={taskText}
@@ -114,6 +136,39 @@ export default function ProjectColumn({ project, onTitleChange, onColorChange, o
           </div>
         </SortableContext>
       </DndContext>
+
+      {/* Duration editor */}
+      <DurationEditorModal
+        isOpen={durationTaskId != null}
+        current={currentDuration}
+        onCancel={closeDuration}
+        onSave={async (minutes) => {
+          const idNum = Number(durationTaskId);
+          if (!Number.isFinite(idNum)) { closeDuration(); return; }
+          try {
+            await updateTask(idNum, { duration: Number(minutes) });
+          } finally {
+            closeDuration();
+          }
+        }}
+      />
+
+      {/* Attach date modal */}
+      <AttachDateModal
+        isOpen={attachTaskId != null}
+        initialDate={attachInitialDate}
+        onCancel={closeAttach}
+        onSave={async (dateObj) => {
+          const idNum = Number(attachTaskId);
+          if (!Number.isFinite(idNum)) { closeAttach(); return; }
+          try {
+            const key = formatISO(dateObj, { representation: 'date' });
+            await updateTask(idNum, { attached_date: key });
+          } finally {
+            closeAttach();
+          }
+        }}
+      />
     </div>
   );
 }

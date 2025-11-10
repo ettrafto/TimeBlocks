@@ -50,6 +50,7 @@ import SeedTools from './pages/debug/SeedTools';
 import Logs from './pages/debug/Logs';
 import { eventTypesApi, libraryEventsApi, scheduledEventsApi, CALENDAR_ID } from './services/api';
 import DebugToggle from './components/DebugToggle';
+import { useCreatePageStore } from './store/createPageStore';
 import { hexToHsl, readableTextOn, tailwindToHex, withSaturation, withLightness, hslToString } from './components/Create/colorUtils.js';
 import { useScheduleStore } from './stores/scheduleStore';
 import { scheduleClient } from './lib/api/scheduleClient';
@@ -552,17 +553,37 @@ function TypeManagerModal({ isOpen, types, onSave, onDelete, onClose, eventTempl
   const [editingType, setEditingType] = React.useState(null);
   const [typeName, setTypeName] = React.useState('');
   const [typeColor, setTypeColor] = React.useState('bg-gray-500');
+  const [editingTask, setEditingTask] = React.useState(null);
+  const [taskTitle, setTaskTitle] = React.useState('');
+  const [taskTypeId, setTaskTypeId] = React.useState('');
+
+  // Load types/tasks into CreatePage store for task management inside modal
+  const cps = useCreatePageStore();
+  React.useEffect(() => {
+    try { cps.init?.(); } catch {}
+    // when modal closes, clear task edit state
+    if (!isOpen) {
+      setEditingTask(null);
+      setTaskTitle('');
+      setTaskTypeId('');
+    }
+  }, [isOpen]);
 
   const handleStartEdit = (type) => {
     setEditingType(type);
     setTypeName(type.name);
     setTypeColor(type.color || 'bg-gray-500');
+    // If switching types while a task is being edited, keep task type aligned
+    setTaskTypeId(String(type.id));
   };
 
   const handleCancelEdit = () => {
     setEditingType(null);
     setTypeName('');
     setTypeColor('bg-gray-500');
+    setEditingTask(null);
+    setTaskTitle('');
+    setTaskTypeId('');
   };
 
   const handleSubmit = (e) => {
@@ -610,7 +631,7 @@ function TypeManagerModal({ isOpen, types, onSave, onDelete, onClose, eventTempl
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black bg-opacity-50" onClick={onClose}></div>
       
-      <div className="relative bg-white rounded-lg shadow-xl p-6 max-w-2xl w-full mx-4 z-10 max-h-[80vh] overflow-y-auto">
+      <div className="relative bg-white rounded-lg shadow-xl p-6 max-w-4xl w-full mx-4 z-10 max-h-[80vh] overflow-y-auto">
         <h2 className="text-xl font-bold text-gray-800 mb-4">Manage Types</h2>
         
         {/* Type Creation/Edit Form */}
@@ -660,46 +681,160 @@ function TypeManagerModal({ isOpen, types, onSave, onDelete, onClose, eventTempl
           </div>
         </form>
 
-        {/* Types List */}
-        <div className="space-y-2">
-          <h3 className="text-sm font-semibold text-gray-700 mb-2">Existing Types ({types.length})</h3>
-          {types.length === 0 ? (
-            <p className="text-sm text-gray-500 italic">No types yet. Add one above!</p>
-          ) : (
-            types.map(type => {
-              const eventsUsingType = eventTemplates.filter(e => e.typeId === type.id).length;
-              return (
-                <div
-                  key={type.id}
-                  className="flex items-center justify-between p-3 bg-white border border-gray-200 rounded hover:bg-gray-50 transition-colors"
+        {/* Two-column layout: Types list on left, Tasks of selected type on right */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Types List */}
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold text-gray-700 mb-2">Existing Types ({types.length})</h3>
+            {types.length === 0 ? (
+              <p className="text-sm text-gray-500 italic">No types yet. Add one above!</p>
+            ) : (
+              types.map(type => {
+                const eventsUsingType = eventTemplates.filter(e => e.typeId === type.id).length;
+                const isActive = editingType && String(editingType.id) === String(type.id);
+                return (
+                  <div
+                    key={type.id}
+                    className={`flex items-center justify-between p-3 bg-white border rounded transition-colors ${isActive ? 'border-blue-300 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'}`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={`w-4 h-4 rounded ${type.color && String(type.color).startsWith('#') ? '' : (type.color || 'bg-gray-400')}`}
+                        style={type.color && String(type.color).startsWith('#') ? { background: type.color } : undefined}
+                      ></div>
+                      <span className="font-medium text-gray-800">{type.name}</span>
+                      <span className="text-xs text-gray-500">
+                        ({eventsUsingType} template{eventsUsingType !== 1 ? 's' : ''})
+                      </span>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleStartEdit(type)}
+                        className="text-blue-600 hover:text-blue-800 text-sm"
+                        title="Edit type"
+                      >
+                        ✏️
+                      </button>
+                      <button
+                        onClick={() => handleDelete(type)}
+                        className="text-red-600 hover:text-red-800 text-sm"
+                        title="Delete type"
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* Tasks for selected type */}
+          <div>
+            <h3 className="text-sm font-semibold text-gray-700 mb-2">Tasks for selected type</h3>
+            {!editingType ? (
+              <p className="text-sm text-gray-500 italic">Select a type on the left to view and edit its tasks.</p>
+            ) : (
+              <>
+                {/* Task edit/create form */}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const tid = Number(editingTask?.id);
+                    const effectiveTypeId = taskTypeId ? Number(taskTypeId) : Number(editingType.id);
+                    if (!taskTitle.trim()) return;
+                    if (editingTask) {
+                      cps.updateTask?.(tid, { title: taskTitle.trim(), type_id: effectiveTypeId });
+                    } else {
+                      cps.addTask?.({ type_id: effectiveTypeId, title: taskTitle.trim() });
+                    }
+                    setEditingTask(null);
+                    setTaskTitle('');
+                  }}
+                  className="mb-4 p-3 bg-gray-50 rounded"
                 >
-                  <div className="flex items-center gap-3">
-                    <div className={`w-4 h-4 rounded ${type.color || 'bg-gray-400'}`}></div>
-                    <span className="font-medium text-gray-800">{type.name}</span>
-                    <span className="text-xs text-gray-500">
-                      ({eventsUsingType} event{eventsUsingType !== 1 ? 's' : ''})
-                    </span>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleStartEdit(type)}
-                      className="text-blue-600 hover:text-blue-800 text-sm"
-                      title="Edit type"
-                    >
-                      ✏️
+                  <div className="flex items-end gap-3">
+                    <div className="flex-1">
+                      <label className="block text-xs font-medium text-gray-600 mb-1">{editingTask ? 'Edit Task Title' : 'New Task Title'}</label>
+                      <input
+                        type="text"
+                        value={taskTitle}
+                        onChange={(e) => setTaskTitle(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                        placeholder="Task title"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Type</label>
+                      <select
+                        value={taskTypeId || String(editingType.id)}
+                        onChange={(e) => setTaskTypeId(e.target.value)}
+                        className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                      >
+                        {types.map(t => (
+                          <option key={t.id} value={t.id}>{t.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors text-sm font-medium">
+                      {editingTask ? 'Save Task' : 'Add Task'}
                     </button>
-                    <button
-                      onClick={() => handleDelete(type)}
-                      className="text-red-600 hover:text-red-800 text-sm"
-                      title="Delete type"
-                    >
-                      🗑️
-                    </button>
+                    {!!editingTask && (
+                      <button
+                        type="button"
+                        onClick={() => { setEditingTask(null); setTaskTitle(''); setTaskTypeId(String(editingType.id)); }}
+                        className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition-colors text-sm font-medium"
+                      >
+                        Cancel
+                      </button>
+                    )}
                   </div>
+                </form>
+
+                {/* Tasks list */}
+                <div className="space-y-2">
+                  {(() => {
+                    const list = (cps.tasksByType?.[editingType.id] || []);
+                    if (list.length === 0) {
+                      return <p className="text-sm text-gray-500 italic">No tasks in this type yet.</p>;
+                    }
+                    return list.map(task => (
+                      <div key={task.id} className="flex items-center justify-between p-3 bg-white border border-gray-200 rounded">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium text-gray-800 truncate">{task.title || task.name}</div>
+                          <div className="text-xs text-gray-500">ID: {task.id}</div>
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => {
+                              setEditingTask(task);
+                              setTaskTitle(task.title || task.name || '');
+                              setTaskTypeId(String(task.type_id ?? editingType.id));
+                            }}
+                            className="text-blue-600 hover:text-blue-800 text-sm"
+                            title="Edit task"
+                          >
+                            ✏️
+                          </button>
+                          <button
+                            onClick={async () => {
+                              if (window.confirm(`Delete task "${task.title || task.name}"?`)) {
+                                await cps.removeTask?.(Number(task.id));
+                              }
+                            }}
+                            className="text-red-600 hover:text-red-800 text-sm"
+                            title="Delete task"
+                          >
+                            🗑️
+                          </button>
+                        </div>
+                      </div>
+                    ));
+                  })()}
                 </div>
-              );
-            })
-          )}
+              </>
+            )}
+          </div>
         </div>
 
         <div className="mt-6 flex justify-end">
@@ -1277,7 +1412,7 @@ function GhostEvent({
       }}
     >
       <div className="text-gray-700 text-sm font-medium">
-        {task.label}
+        {String(task?.label || task?.name || '').replace(/^[^A-Za-z0-9]+/, '').trim()}
       </div>
       <div className="text-gray-600 text-xs">
         {formatTime(startMinutes)} - {formatTime(endMinutes)}
@@ -1677,42 +1812,7 @@ function LeftPaneHeader({
   onOpenCreateEvent,
   onOpenTypes,
 }) {
-  return (
-    <div className="sticky top-0 z-10 bg-gray-50/95 backdrop-blur border-b border-gray-200 px-4 py-3 flex items-center justify-between">
-      <div className="text-sm font-semibold text-gray-700">
-        Event Templates
-      </div>
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={onOpenTypes}
-          className="inline-flex items-center rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-400/50 shadow-sm"
-          aria-label="Manage Types"
-          title="Manage Types"
-        >
-          {/* simple icon: tags */}
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M20 10L12 2H4v8l8 8 8-8z" stroke="currentColor" strokeWidth="1.5" />
-            <circle cx="7" cy="7" r="1.5" fill="currentColor" />
-          </svg>
-          <span className="ml-1.5">Types</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={onOpenCreateEvent}
-          className="inline-flex items-center rounded-md bg-blue-600 text-white px-2.5 py-1.5 text-xs font-semibold hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-400/50 shadow-sm"
-          aria-label="Add Event"
-          title="Add Event"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-          </svg>
-          <span className="ml-1.5">Add</span>
-        </button>
-      </div>
-    </div>
-  );
+  return null;
 }
 
 // ========================================
@@ -1966,6 +2066,8 @@ function App() {
   const [scheduledItems, setScheduledItems] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [nextId, setNextId] = useState(1);
+  // Overlay preview for sidebar reordering
+  const [activeSidebarTask, setActiveSidebarTask] = useState(null);
 
   // State: Track ghost/shadow preview position while dragging over calendar
   const [ghostPosition, setGhostPosition] = useState(null);
@@ -1996,6 +2098,23 @@ function App() {
       });
     }
   }, [scheduledItems]);
+  
+  // Publish scheduled template IDs to UI store to disable dragging duplicates from sidebar
+  React.useEffect(() => {
+    try {
+      // Gather from persisted schedules (all cached occurrences) + local legacy scheduledItems
+      const allOccs = Object.values(useScheduleStore.getState().byOccId || {});
+      const occTaskIds = new Set((allOccs || []).map(o => String(o.taskId)).filter(Boolean));
+      const localTemplateIds = new Set(
+        (scheduledItems || [])
+          .map((e) => e.templateTaskId)
+          .filter((v) => v != null && String(v).length > 0)
+          .map(String)
+      );
+      const union = new Set([...Array.from(occTaskIds), ...Array.from(localTemplateIds)]);
+      uiStore.setScheduledTemplateIds(union);
+    } catch {}
+  }, [_schedRenderTick, scheduledItems]);
   
   // State: Event editor modal
   const [showEventEditor, setShowEventEditor] = useState(false);
@@ -2220,34 +2339,70 @@ function App() {
   // Save type (create or update)
   const handleSaveType = async (typeData) => {
     const existingType = types.find(t => t.id === typeData.id);
+    // Normalize color to hex for consistency across app
+    const hexColor = typeof typeData.color === 'string' && typeData.color.startsWith('#') ? typeData.color : tailwindToHex(typeData.color || '');
+    const normalized = { ...typeData, color: hexColor };
     
     try {
       if (existingType) {
         // Update existing type on backend
-        await eventTypesApi.update(typeData.id, {
-          ...typeData,
+        await eventTypesApi.update(normalized.id, {
+          ...normalized,
           workspaceId: 'ws_dev',
           defaultsJsonb: '{}',
         });
-        setTypes(prev => prev.map(t => t.id === typeData.id ? typeData : t));
-        console.log('✅ Type updated on backend:', typeData.id);
+        setTypes(prev => prev.map(t => t.id === normalized.id ? normalized : t));
+        // Sync other stores without extra network requests
+        try {
+          useCreatePageStore.setState((s) => ({ types: s.types.map(t => t.id === normalized.id ? { ...t, name: normalized.name, color: normalized.color } : t) }));
+        } catch {}
+        try {
+          useTypesStore.setState((s) => ({ items: s.items.map(t => (String(t.id) === String(normalized.id) ? { ...t, name: normalized.name, color: normalized.color } : t)) }));
+        } catch {}
+        console.log('✅ Type updated on backend:', normalized.id);
       } else {
         // Create new type on backend
         const created = await eventTypesApi.create({
-          ...typeData,
+          ...normalized,
           workspaceId: 'ws_dev',
           defaultsJsonb: '{}',
         });
-        setTypes(prev => [...prev, { ...typeData, id: created.id }]);
+        const createdType = { ...normalized, id: created.id };
+        setTypes(prev => [...prev, createdType]);
+        // Sync other stores (in-memory) without duplicate creates
+        try {
+          useCreatePageStore.setState((s) => ({ 
+            types: [createdType, ...s.types],
+            tasksByType: { ...s.tasksByType, [createdType.id]: (s.tasksByType?.[createdType.id] || []) }
+          }));
+        } catch {}
+        try {
+          useTypesStore.setState((s) => ({ items: [...s.items, createdType] }));
+        } catch {}
         console.log('✅ Type created on backend:', created.id);
       }
     } catch (error) {
       console.error('❌ Failed to save type on backend:', error);
       // Still update local state for offline support
       if (existingType) {
-        setTypes(prev => prev.map(t => t.id === typeData.id ? typeData : t));
+        setTypes(prev => prev.map(t => t.id === normalized.id ? normalized : t));
+        try {
+          useCreatePageStore.setState((s) => ({ types: s.types.map(t => t.id === normalized.id ? { ...t, name: normalized.name, color: normalized.color } : t) }));
+        } catch {}
+        try {
+          useTypesStore.setState((s) => ({ items: s.items.map(t => (String(t.id) === String(normalized.id) ? { ...t, name: normalized.name, color: normalized.color } : t)) }));
+        } catch {}
       } else {
-        setTypes(prev => [...prev, typeData]);
+        setTypes(prev => [...prev, normalized]);
+        try {
+          useCreatePageStore.setState((s) => ({ 
+            types: [normalized, ...s.types],
+            tasksByType: { ...s.tasksByType, [normalized.id]: (s.tasksByType?.[normalized.id] || []) }
+          }));
+        } catch {}
+        try {
+          useTypesStore.setState((s) => ({ items: [...s.items, normalized] }));
+        } catch {}
       }
     }
   };
@@ -2266,6 +2421,20 @@ function App() {
     setScheduledItems(prev =>
       prev.map(item => item.typeId === typeId ? { ...item, typeId: null } : item)
     );
+
+    // Sync other stores immediately
+    try {
+      useCreatePageStore.setState((s) => {
+        const { [typeId]: _, ...rest } = s.tasksByType || {};
+        return {
+          types: (s.types || []).filter(t => t.id !== typeId),
+          tasksByType: rest
+        };
+      });
+    } catch {}
+    try {
+      useTypesStore.setState((s) => ({ items: (s.items || []).filter(t => String(t.id) !== String(typeId)) }));
+    } catch {}
 
     // Delete from backend
     try {
@@ -2576,6 +2745,30 @@ function App() {
       if (data?.type === 'template' && data?.task) {
         setActiveDragTemplate(data.task);
       }
+      // Prepare overlay for sidebar event reordering (use TaskBlock style)
+      if (data?.context === 'sidebar' && data?.kind === 'task') {
+        const typeId = String(data.typeId);
+        const evId = String(data.eventId || event.active.id);
+        const cpsState = useCreatePageStore.getState();
+        const tasksByType = cpsState.tasksByType || {};
+        const list = tasksByType[Number(typeId)] || tasksByType[typeId] || [];
+        const found = list.find(t => String(t.id) === evId);
+        const byId = (useTypesStore && useTypesStore.getState) ? useTypesStore.getState().byId?.() : null;
+        const typeColorRaw = byId?.[String(typeId)]?.color || null;
+        const typeHex = typeColorRaw ? (typeColorRaw.startsWith('#') ? typeColorRaw : tailwindToHex(typeColorRaw)) : '#3b82f6';
+        const base = hexToHsl(typeHex);
+        const bgHsl = withLightness(withSaturation(base, base.s * 0.35), 0.92);
+        const bg = hslToString(bgHsl);
+        const text = readableTextOn(bgHsl);
+        setActiveSidebarTask({
+          name: (found?.title || found?.name || 'Untitled'),
+          label: (found?.title || found?.name || 'Untitled'),
+          duration: Number(found?.duration) || 30,
+          typeId: String(typeId),
+          color: bg,
+          textColor: text,
+        });
+      }
       console.info('🎯 DRAG START', {
         id: event.active.id,
         kind: data?.context || data?.type,
@@ -2648,16 +2841,6 @@ function App() {
       setGhostPosition({ startMinutes: finalMinutes, dayKey: dayKeyForGhost, task: taskInfo });
       return;
     } else if (activeData.type === 'scheduled') {
-      // If dropping a scheduled event onto a Type in the sidebar, unschedule it
-      const overIdStr = over?.id ? String(over.id) : '';
-      if (overIdStr.startsWith('type-drop:')) {
-        const item = activeData.item;
-        const dropTypeId = overIdStr.split(':')[1];
-        console.log('🗑️ Unschedule event via sidebar drop', { eventId: item.id, dropTypeId });
-        setScheduledItems(prev => prev.filter(e => e.id !== item.id));
-        setGhostPosition(null);
-        return;
-      }
       // ========================================
       // REPOSITIONING EXISTING EVENT - Show ghost at new position
       // RESILIENT: Works even if over is null (collision detection miss)
@@ -2719,6 +2902,7 @@ function App() {
     
     setActiveId(null);
     setActiveDragTemplate(null);
+    setActiveSidebarTask(null);
 
     const activeData = active.data.current;
 
@@ -2812,6 +2996,7 @@ function App() {
         duration: duration,
         typeId: task.typeId || null, // Preserve type association
         dateKey: targetDayKey, // NEW: Associate with target day
+        templateTaskId: String(task.id || ''), // Link back to template/task to disable duplicate drags
       };
       
       console.log('📦 New item to place:', newItem);
@@ -2941,7 +3126,18 @@ function App() {
       // DRAGGING WITHIN CALENDAR - REPOSITION EXISTING EVENT
       // RESILIENT: Use ghost position if available, otherwise calculate from delta
       // ========================================
-      
+      // If dropped over the left sidebar (global drop zone) or a type drop zone, unschedule the event
+      const overIdStr = over?.id ? String(over.id) : '';
+      if (overIdStr === 'left-sidebar' || overIdStr.startsWith('type-drop:')) {
+        const item = activeData.item;
+        console.log('🗑️ Unschedule event via sidebar drop (on end)', { eventId: item.id, over: overIdStr });
+        setScheduledItems(prev => prev.filter(e => e.id !== item.id));
+        setGhostPosition(null);
+        // Persist delete via events store if this is a legacy scheduled event
+        try { removeEvent?.(item.id); } catch (e) { /* ignore */ }
+        return;
+      }
+
       const item = activeData.item;
       let finalMinutes;
       
@@ -3471,12 +3667,13 @@ function App() {
                 activeId?.startsWith('template-')
                   ? { 
                       ...activeItem, 
-                      label: activeItem.name || activeItem.label,
+                      label: String(activeItem.name || activeItem.label || '').replace(/^[^A-Za-z0-9]+/, '').trim(),
+                      name: String(activeItem.name || activeItem.label || '').replace(/^[^A-Za-z0-9]+/, '').trim(),
                       typeId: activeItem.typeId || null,
                     }
                   : {
-                      name: activeItem.label || activeItem.name,
-                      label: activeItem.label || activeItem.name,
+                      name: String(activeItem.label || activeItem.name || '').replace(/^[^A-Za-z0-9]+/, '').trim(),
+                      label: String(activeItem.label || activeItem.name || '').replace(/^[^A-Za-z0-9]+/, '').trim(),
                       color: activeItem.color || 'bg-gray-500',
                       duration: activeItem.duration || 30,
                       typeId: activeItem.typeId || null,
@@ -3484,6 +3681,10 @@ function App() {
               }
               types={types}
             />
+          </div>
+        ) : activeSidebarTask ? (
+          <div className="opacity-90">
+            <TaskBlock task={activeSidebarTask} types={types} />
           </div>
         ) : null}
       </DragOverlay>
@@ -3565,6 +3766,7 @@ function App() {
         onClose={() => setShowTypesManager(false)}
         eventTemplates={taskTemplates}
       />
+      
 
       {/* Debug Toggle (dev only) */}
       <DebugToggle />

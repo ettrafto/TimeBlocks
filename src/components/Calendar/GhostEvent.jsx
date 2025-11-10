@@ -25,6 +25,11 @@ export default function GhostEvent({
   
   // Calculate end time for preview
   const endMinutes = startMinutes + duration;
+  // Sanitize label for ghost preview: strip leading emojis/symbols (type/folder icons, etc.)
+  const displayLabel = (() => {
+    const raw = task?.label || task?.name || '';
+    return String(raw).replace(/^[^A-Za-z0-9]+/, '').trim();
+  })();
 
   return (
     <div
@@ -45,7 +50,7 @@ export default function GhostEvent({
       )}
       
       <div className="text-gray-700 text-sm font-medium">
-        {task.label}
+        {displayLabel}
       </div>
       <div className="text-gray-600 text-xs">
         {formatTime(startMinutes)} - {formatTime(endMinutes)}

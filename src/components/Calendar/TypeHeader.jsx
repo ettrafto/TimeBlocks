@@ -6,7 +6,20 @@ const COLOR_OPTIONS = [
   'bg-yellow-500','bg-pink-500','bg-indigo-500','bg-teal-500','bg-cyan-500'
 ];
 
-export default function TypeHeader({ typeEntity, count, collapsed, onToggle, onChangeColor }) {
+// Icons (outline, consistent with Create page)
+const EditIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 3.487L20.513 7.138M9.75 20.25H4.5v-5.25L16.862 3.487a2.25 2.25 0 013.182 3.182L7.682 18.182" />
+  </svg>
+);
+
+const TrashIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 7.5h15m-10.5 0V6a2.25 2.25 0 0 1 2.25-2.25h1.5A2.25 2.25 0 0 1 15.75 6v1.5M6.75 7.5l.75 10.5a2.25 2.25 0 0 0 2.25 2.25h4.5a2.25 2.25 0 0 0 2.25-2.25l.75-10.5" />
+  </svg>
+);
+
+export default function TypeHeader({ typeEntity, count, collapsed, onToggle, onChangeColor, onEdit, onDelete }) {
   const color = typeEntity?.color || '#3b82f6';
   const name = typeEntity?.name || 'Untyped';
   const [showPicker, setShowPicker] = useState(false);
@@ -34,11 +47,11 @@ export default function TypeHeader({ typeEntity, count, collapsed, onToggle, onC
       tabIndex={0}
       onClick={onToggle}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}
-      className="flex items-center justify-between rounded-lg px-3 py-1.5 shadow-sm cursor-pointer"
+      className="grid grid-cols-[1fr_auto_1fr] items-center rounded-lg px-3 py-1.5 shadow-sm cursor-pointer"
       style={{ background: bg, color: text }}
     >
+      {/* Left: type color + name + count */}
       <div className="flex items-center gap-2">
-        {/* Color selector button replaces dot */}
         <div className="relative" ref={ref}>
           <button
             onClick={(e) => { e.stopPropagation(); setShowPicker(!showPicker); }}
@@ -63,9 +76,51 @@ export default function TypeHeader({ typeEntity, count, collapsed, onToggle, onC
         <span className="font-medium">{name}</span>
         <span className="text-xs opacity-70">({count})</span>
       </div>
-      <div className="flex items-center gap-2">
-        <span className="text-xs opacity-70 select-none" style={{ color: text }}>{collapsed ? 'Expand' : 'Collapse'}</span>
-        <span className="opacity-60" style={{ color: text }}>▸</span>
+
+      {/* Center: Collapse/Expand arrow */}
+      <div className="justify-self-center">
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onToggle?.(); }}
+          className="px-4 py-1.5 rounded bg-white/20 hover:bg-white/30 transition-colors"
+          aria-label={collapsed ? 'Expand' : 'Collapse'}
+          title={collapsed ? 'Expand' : 'Collapse'}
+          style={{ color: text }}
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            className={`${collapsed ? '' : 'rotate-90'} transition-transform`}
+          >
+            <path d="M8 5l8 7-8 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+      </div>
+
+      {/* Right: Edit + Delete buttons */}
+      <div className="flex items-center gap-2 justify-self-end">
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onEdit?.(typeEntity); }}
+          className="p-1.5 rounded bg-white/20 hover:bg-white/30 transition-colors"
+          title="Edit"
+          aria-label="Edit"
+          style={{ color: text }}
+        >
+          <EditIcon />
+        </button>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onDelete?.(typeEntity); }}
+          className="p-1.5 rounded bg-black/20 hover:bg-black/30 text-white transition-colors"
+          title="Delete"
+          aria-label="Delete"
+        >
+          <TrashIcon />
+        </button>
       </div>
     </header>
   );

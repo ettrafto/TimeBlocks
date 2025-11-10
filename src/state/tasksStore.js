@@ -7,6 +7,8 @@ export const useTasksStore = create((set, get) => ({
   tasksById: {},
   tasksByTypeId: {},
   subtasksByTaskId: {},
+  // shadow map of in-flight subtask loads to prevent duplicate parallel calls
+  _loadingSubtasks: {},
   loading: false,
   error: null,
   lastLoadedAt: 0,
@@ -25,21 +27,8 @@ export const useTasksStore = create((set, get) => ({
         if (!tasksByTypeId[tid]) tasksByTypeId[tid] = [];
         tasksByTypeId[tid].push(t.id);
       }
-
-      // Load subtasks for each task
-      const subtasksByTaskId = {};
-      await Promise.all(tasks.map(async (t) => {
-        try {
-          const subs = await tasksClient.listSubtasks(t.id);
-          subtasksByTaskId[t.id] = subs.map(s => s.id);
-          // store subtask entities inline in a shadow map
-          set((s) => ({
-            subtasksEntities: { ...(s.subtasksEntities || {}), ...Object.fromEntries(subs.map(st => [st.id, st])) }
-          }));
-        } catch {}
-      }));
-
-      set({ tasksById, tasksByTypeId, subtasksByTaskId, loading: false, error: null, lastLoadedAt: Date.now() });
+      // Do not preload subtasks for every task to reduce server load; lazy-load on demand
+      set({ tasksById, tasksByTypeId, subtasksByTaskId: {}, loading: false, error: null, lastLoadedAt: Date.now() });
     } catch (e) {
       set({ tasksById: {}, tasksByTypeId: {}, subtasksByTaskId: {}, loading: false, error: e?.message || String(e), lastLoadedAt: Date.now() });
     }
@@ -56,6 +45,31 @@ export const useTasksStore = create((set, get) => ({
     const ids = get().subtasksByTaskId[taskId] || [];
     const map = get().subtasksEntities || {};
     return ids.map(id => map[id]).filter(Boolean);
+  },
+
+  // Lazy-load subtasks for a task (no-op if already loaded and not forced)
+  async loadSubtasks(taskId, { force = false } = {}) {
+    const s = get();
+    if (!force && Array.isArray(s.subtasksByTaskId[taskId]) && s.subtasksByTaskId[taskId].length > 0) return;
+    // prevent duplicate parallel fetches
+    if (s._loadingSubtasks[taskId]) return;
+    set((prev) => ({ _loadingSubtasks: { ...(prev._loadingSubtasks || {}), [taskId]: true } }));
+    try {
+      const subs = await tasksClient.listSubtasks(taskId);
+      const ids = subs.map(st => st.id);
+      set((prev) => ({
+        subtasksByTaskId: { ...(prev.subtasksByTaskId || {}), [taskId]: ids },
+        subtasksEntities: { ...(prev.subtasksEntities || {}), ...Object.fromEntries(subs.map(st => [st.id, st])) },
+      }));
+    } catch (e) {
+      // Swallow errors to avoid UI spam; caller can decide to retry
+    } finally {
+      set((prev) => {
+        const next = { ...(prev._loadingSubtasks || {}) };
+        delete next[taskId];
+        return { _loadingSubtasks: next };
+      });
+    }
   },
 
   // Task CRUD

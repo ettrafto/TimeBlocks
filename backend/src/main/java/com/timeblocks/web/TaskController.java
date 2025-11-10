@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.time.LocalDate;
 
 @RestController
 @RequestMapping("/api")
@@ -62,6 +63,7 @@ public class TaskController {
             payload.put("title", task.getTitle());
             payload.put("description", task.getDescription());
             payload.put("status", task.getStatus());
+            payload.put("attached_date", task.getAttachedDate());
             TBLog.kv("Payload", payload);
             
             Task saved = taskRepo.save(task);
@@ -70,6 +72,7 @@ public class TaskController {
             dbResult.put("id", saved.getId());
             dbResult.put("title", saved.getTitle());
             dbResult.put("type_id", saved.getTypeId());
+            dbResult.put("attached_date", saved.getAttachedDate());
             TBLog.kv("DB created", dbResult);
             TBLog.info("Created task: {}", saved.getId());
             
@@ -106,6 +109,15 @@ public class TaskController {
             }
             if (updates.containsKey("type_id")) {
                 task.setTypeId(((Number) updates.get("type_id")).intValue());
+            }
+            if (updates.containsKey("attached_date")) {
+                Object v = updates.get("attached_date");
+                LocalDate d = v == null ? null : LocalDate.parse(String.valueOf(v));
+                task.setAttachedDate(d);
+            } else if (updates.containsKey("attachedDate")) {
+                Object v = updates.get("attachedDate");
+                LocalDate d = v == null ? null : LocalDate.parse(String.valueOf(v));
+                task.setAttachedDate(d);
             }
             
             Task updated = taskRepo.save(task);

@@ -27,8 +27,16 @@ public class CorrelationFilter implements Filter {
       chain.doFilter(req, res);
       long dt = System.currentTimeMillis() - t0;
       w.setHeader(HDR, cid);
-      org.slf4j.LoggerFactory.getLogger(getClass())
-        .info("cid={} {} {} -> {} ({} ms)", cid, r.getMethod(), r.getRequestURI(), w.getStatus(), dt);
+      // Reduce noise for high-frequency endpoints
+      String path = r.getRequestURI();
+      var logger = org.slf4j.LoggerFactory.getLogger(getClass());
+      if (path.startsWith("/api/subtasks")) {
+        if (logger.isDebugEnabled()) {
+          logger.debug("cid={} {} {} -> {} ({} ms)", cid, r.getMethod(), path, w.getStatus(), dt);
+        }
+      } else {
+        logger.info("cid={} {} {} -> {} ({} ms)", cid, r.getMethod(), path, w.getStatus(), dt);
+      }
     } finally {
       MDC.remove(MDC_KEY);
     }

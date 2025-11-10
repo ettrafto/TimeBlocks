@@ -3,6 +3,7 @@ package com.timeblocks.model;
 import com.fasterxml.jackson.annotation.JsonAlias;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
+import java.time.LocalDate;
 
 @Entity
 @Table(name = "tasks")
@@ -22,6 +23,10 @@ public class Task {
     
     @Column(nullable = false)
     private String status = "todo";
+
+    @Column(name = "attached_date")
+    @JsonAlias({"attached_date", "attachedDate"})
+    private LocalDate attachedDate;
     
     @Column(name = "created_at")
     private LocalDateTime createdAt;
@@ -78,6 +83,14 @@ public class Task {
     
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public LocalDate getAttachedDate() {
+        return attachedDate;
+    }
+
+    public void setAttachedDate(LocalDate attachedDate) {
+        this.attachedDate = attachedDate;
     }
 }
 

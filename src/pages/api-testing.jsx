@@ -5,10 +5,22 @@ import { eventsStore } from "../state/eventsStoreWithBackend.js";
 import DebugNav from "../debug/components/DebugNav";
 import log from "../lib/logger";
 
+// Icons (outline, consistent with Create page)
+const EditIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 3.487L20.513 7.138M9.75 20.25H4.5v-5.25L16.862 3.487a2.25 2.25 0 013.182 3.182L7.682 18.182" />
+  </svg>
+);
+const TrashIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 7.5h15m-10.5 0V6a2.25 2.25 0 0 1 2.25-2.25h1.5A2.25 2.25 0 0 1 15.75 6v1.5M6.75 7.5l.75 10.5a2.25 2.25 0 0 0 2.25 2.25h4.5a2.25 2.25 0 0 0 2.25-2.25l.75-10.5" />
+  </svg>
+);
+
 export default function ApiTestingPage() {
   const { items: types, loading: typesLoading, error: typesError, loadAll: loadTypes, create: createType, update: updateType, remove: removeType, counts: typeCounts } = useTypesStore();
   const orderedTypes = useTypesOrdered();
-  const { loadAll: loadTasks, tasks, tasksForType, byTypeId, subtasksForTask, createTask, updateTask, removeTask, addSubtask, updateSubtask, removeSubtask, loading: tasksLoading, error: tasksError } = useTasksStore();
+  const { loadAll: loadTasks, loadSubtasks, tasks, tasksForType, byTypeId, subtasksForTask, createTask, updateTask, removeTask, addSubtask, updateSubtask, removeSubtask, loading: tasksLoading, error: tasksError } = useTasksStore();
 
   // wire events store via subscription
   const eventsSnapshot = useSyncExternalStore(eventsStore.subscribe, eventsStore.get);
@@ -53,7 +65,9 @@ export default function ApiTestingPage() {
   };
   const onDeleteType = async (t) => { await removeType(t.id); };
 
-  const loadTaskIntoForm = (t) => {
+  const loadTaskIntoForm = async (t) => {
+    // Ensure subtasks for this task are loaded on demand
+    try { await loadSubtasks?.(t.id, { force: false }); } catch {}
     setTaskForm({
       id: t.id,
       type_id: t.type_id,
@@ -81,6 +95,7 @@ export default function ApiTestingPage() {
     if (taskForm.id === t.id) resetTaskForm();
   };
 
+  // Legacy quick-add (kept for debugging, not used in UI)
   const onAddSubtask = async () => {
     if (!subForm.task_id) return;
     await addSubtask(Number(subForm.task_id), subForm.title || "Untitled");
@@ -145,8 +160,12 @@ export default function ApiTestingPage() {
                 </div>
                   <div className="flex items-center gap-3">
                     <span className="text-xs text-gray-500">count: {typeCounts()[String(t.id)] ?? 0}</span>
-                    <button onClick={() => onEditType(t)} className="px-3 py-1 border rounded-md text-xs">Edit</button>
-                    <button onClick={() => onDeleteType(t)} className="px-3 py-1 border rounded-md text-xs text-red-600">Delete</button>
+                    <button onClick={() => onEditType(t)} className="p-1.5 border rounded-md text-xs hover:bg-gray-50" title="Edit" aria-label="Edit">
+                      <EditIcon />
+                    </button>
+                    <button onClick={() => onDeleteType(t)} className="p-1.5 border rounded-md text-xs text-red-600 hover:bg-red-50" title="Delete" aria-label="Delete">
+                      <TrashIcon />
+                    </button>
                 </div>
               </li>
             ))}
@@ -180,8 +199,12 @@ export default function ApiTestingPage() {
                               {task.description && <div className="text-gray-600">{task.description}</div>}
                 </div>
                 <div className="flex gap-2">
-                              <button onClick={(e) => { e.stopPropagation(); loadTaskIntoForm(task); }} className="px-3 py-1 border rounded-md text-xs">Edit</button>
-                              <button onClick={(e) => { e.stopPropagation(); onDeleteTask(task); }} className="px-3 py-1 border rounded-md text-xs text-red-600">Delete</button>
+                              <button onClick={(e) => { e.stopPropagation(); loadTaskIntoForm(task); }} className="p-1.5 border rounded-md text-xs hover:bg-gray-50" title="Edit" aria-label="Edit">
+                                <EditIcon />
+                              </button>
+                              <button onClick={(e) => { e.stopPropagation(); onDeleteTask(task); }} className="p-1.5 border rounded-md text-xs text-red-600 hover:bg-red-50" title="Delete" aria-label="Delete">
+                                <TrashIcon />
+                              </button>
                             </div>
                           </div>
                           <div className="mt-2 pl-3">
@@ -192,8 +215,12 @@ export default function ApiTestingPage() {
                                 <li key={st.id} className="flex items-center justify-between border rounded px-2 py-1 text-xs cursor-pointer" onClick={(e) => { e.stopPropagation(); loadSubtaskIntoForm(st); }}>
                                   <span>{st.title}</span>
                                   <div className="flex items-center gap-2">
-                                    <button onClick={(e) => { e.stopPropagation(); loadSubtaskIntoForm(st); }} className="px-2 py-0.5 border rounded">Edit</button>
-                                    <button onClick={(e) => { e.stopPropagation(); onDeleteSubtask(st); }} className="px-2 py-0.5 border rounded text-red-600">Delete</button>
+                                    <button onClick={(e) => { e.stopPropagation(); loadSubtaskIntoForm(st); }} className="p-1.5 border rounded hover:bg-gray-50" title="Edit" aria-label="Edit">
+                                      <EditIcon />
+                                    </button>
+                                    <button onClick={(e) => { e.stopPropagation(); onDeleteSubtask(st); }} className="p-1.5 border rounded text-red-600 hover:bg-red-50" title="Delete" aria-label="Delete">
+                                      <TrashIcon />
+                                    </button>
                                   </div>
                                 </li>
                               ))}
@@ -263,9 +290,8 @@ export default function ApiTestingPage() {
                     value={subtaskForm.task_id || taskForm.id || 0}
                     onChange={(e) => setSubtaskForm({ ...subtaskForm, task_id: Number(e.target.value) })}
                     placeholder="Task ID"
-                    disabled={!taskForm.id}
                   />
-                  <div className="text-xs text-gray-500 mt-1">Select a Task from the left list first.</div>
+                  <div className="text-xs text-gray-500 mt-1">Select a Task from the left list or enter an ID.</div>
                 </div>
                 <div className="sm:col-span-2">
                   <label className="block text-xs text-gray-600 mb-1">Subtask title</label>
@@ -279,7 +305,11 @@ export default function ApiTestingPage() {
                 </div>
               </div>
               <div className="flex items-center gap-2 mt-3">
-                <button onClick={onSubmitSubtask} disabled={!taskForm.id || !subtaskForm.title?.trim()} className="px-3 py-2 bg-blue-600 text-white rounded-md text-sm disabled:opacity-50">
+                <button
+                  onClick={onSubmitSubtask}
+                  disabled={!(Number(subtaskForm.task_id || taskForm.id || 0) > 0) || !subtaskForm.title?.trim()}
+                  className="px-3 py-2 bg-blue-600 text-white rounded-md text-sm disabled:opacity-50"
+                >
                   {subtaskForm.id ? 'Save Subtask' : 'Add Subtask'}
                 </button>
                 <button onClick={resetSubtaskForm} className="px-3 py-2 border rounded-md text-sm">Reset subtask form</button>

@@ -1,17 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-
-const COLOR_OPTIONS = [
-  { name: 'Blue', value: 'bg-blue-500', light: 'bg-blue-50' },
-  { name: 'Purple', value: 'bg-purple-500', light: 'bg-purple-50' },
-  { name: 'Green', value: 'bg-green-500', light: 'bg-green-50' },
-  { name: 'Orange', value: 'bg-orange-500', light: 'bg-orange-50' },
-  { name: 'Red', value: 'bg-red-500', light: 'bg-red-50' },
-  { name: 'Yellow', value: 'bg-yellow-500', light: 'bg-yellow-50' },
-  { name: 'Pink', value: 'bg-pink-500', light: 'bg-pink-50' },
-  { name: 'Indigo', value: 'bg-indigo-500', light: 'bg-indigo-50' },
-  { name: 'Teal', value: 'bg-teal-500', light: 'bg-teal-50' },
-  { name: 'Cyan', value: 'bg-cyan-500', light: 'bg-cyan-50' },
-];
+import { COLOR_OPTIONS } from '../../constants/colors';
 
 export default function ProjectHeader({ project, onTitleChange, onColorChange, textColor }) {
   const [isEditing, setIsEditing] = useState(false);
@@ -52,7 +40,7 @@ export default function ProjectHeader({ project, onTitleChange, onColorChange, t
     }
   };
 
-  const currentColor = COLOR_OPTIONS.find(c => c.value === project.color) || COLOR_OPTIONS[0];
+  const currentColor = COLOR_OPTIONS.find(c => c.hex === project.color) || COLOR_OPTIONS[0];
   const textColorStyle = textColor || '#111111';
 
   return (
@@ -74,12 +62,8 @@ export default function ProjectHeader({ project, onTitleChange, onColorChange, t
       <div className="relative" ref={colorPickerRef}>
         <button
           onClick={() => setShowColorPicker(!showColorPicker)}
-          className={`
-            w-6 h-6 rounded-full ${currentColor.value} 
-            border-2 border-white/50
-            hover:scale-110 transition-transform duration-200
-            cursor-pointer
-          `}
+          className="w-6 h-6 rounded-full border-2 border-white/50 hover:scale-110 transition-transform duration-200 cursor-pointer"
+          style={{ background: currentColor.hex }}
           title="Change color"
           aria-label="Change project color"
         />
@@ -92,14 +76,11 @@ export default function ProjectHeader({ project, onTitleChange, onColorChange, t
                 <button
                   key={color.value}
                   onClick={() => {
-                    onColorChange(project.id, color.value);
+                    onColorChange(project.id, color.hex);
                     setShowColorPicker(false);
                   }}
-                  className={`
-                    w-8 h-8 rounded-full ${color.value} 
-                    border-2 ${project.color === color.value ? 'border-gray-800' : 'border-white'}
-                    hover:scale-110 transition-transform duration-200
-                  `}
+                  className={`w-8 h-8 rounded-full border-2 ${project.color === color.hex ? 'border-gray-800' : 'border-white'} hover:scale-110 transition-transform duration-200`}
+                  style={{ background: color.hex }}
                   title={color.name}
                   aria-label={`Select ${color.name} color`}
                 />

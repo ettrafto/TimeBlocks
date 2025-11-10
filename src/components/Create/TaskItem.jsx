@@ -27,6 +27,13 @@ const ClockIcon = () => (
   </svg>
 );
 
+// Trash/Delete icon
+const TrashIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 7.5h15m-10.5 0V6a2.25 2.25 0 0 1 2.25-2.25h1.5A2.25 2.25 0 0 1 15.75 6v1.5M6.75 7.5l.75 10.5a2.25 2.25 0 0 0 2.25 2.25h4.5a2.25 2.25 0 0 0 2.25-2.25l.75-10.5" />
+  </svg>
+);
+
 // Sortable subtask item component
 function SortableSubtaskLi({ id, subtask, onUpdateTitle, onRemove, textColor }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
@@ -87,12 +94,12 @@ function SortableSubtaskLi({ id, subtask, onUpdateTitle, onRemove, textColor }) 
         placeholder="Subtask name"
       />
       <button
-        className="px-2 py-1 text-xs rounded-md hover:bg-black/5 transition-colors"
+        className="p-1.5 rounded-md hover:bg-black/5 transition-colors duration-200"
         style={{ color: textColorStyle }}
         aria-label="Remove subtask"
         onClick={() => onRemove(subtask.id)}
       >
-        Delete
+        <TrashIcon />
       </button>
     </li>
   );
@@ -256,15 +263,20 @@ export default function TaskItem({
           >
             <ClockIcon />
           </button>
+          {Number.isFinite(Number(task?.duration)) && (
+            <div className="text-[11px] px-2 py-0.5 rounded border border-black/10" style={{ color: textColorStyle }}>
+              {Number(task.duration)}m
+            </div>
+          )}
           {onRemoveTask && (
             <button
               onClick={onRemoveTask}
-              className="px-2 py-1 text-xs rounded-md hover:bg-black/5 transition-colors"
+              className="p-1.5 rounded-md hover:bg-black/5 transition-colors duration-200"
               style={{ color: textColorStyle }}
               aria-label="Remove task"
               title="Delete task"
             >
-              Delete
+              <TrashIcon />
             </button>
           )}
         </div>

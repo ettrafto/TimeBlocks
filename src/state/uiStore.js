@@ -30,14 +30,17 @@ export function createUiStore() {
     if (savedEventOrder) eventOrderByType = JSON.parse(savedEventOrder);
   } catch {}
 
+  // Scheduled template IDs (map for O(1) lookups) - ephemeral per session
+  let scheduledTemplateIds = {};
+
   // Cache state to prevent infinite loops
-  let cachedState = { dragOverNamespace, activeResize, collapsedByType, typeOrder, eventOrderByType };
+  let cachedState = { dragOverNamespace, activeResize, collapsedByType, typeOrder, eventOrderByType, scheduledTemplateIds };
 
   const subs = new Set();
   const get = () => cachedState;
   const subscribe = (fn) => { subs.add(fn); return () => subs.delete(fn); };
   const notify = () => {
-    cachedState = { dragOverNamespace, activeResize, collapsedByType, typeOrder, eventOrderByType };
+    cachedState = { dragOverNamespace, activeResize, collapsedByType, typeOrder, eventOrderByType, scheduledTemplateIds };
     subs.forEach((fn) => fn(cachedState));
   };
 
@@ -100,6 +103,20 @@ export function createUiStore() {
     notify();
   };
 
+  const setScheduledTemplateIds = (ids) => {
+    // ids can be Set<string> or array<string> or map-like
+    const map = {};
+    if (Array.isArray(ids)) {
+      ids.forEach((id) => { map[String(id)] = true; });
+    } else if (ids && typeof ids.forEach === 'function') {
+      ids.forEach((id) => { map[String(id)] = true; });
+    } else if (ids && typeof ids === 'object') {
+      for (const k of Object.keys(ids)) map[String(k)] = !!ids[k];
+    }
+    scheduledTemplateIds = map;
+    notify();
+  };
+
   return {
     get, 
     subscribe,
@@ -115,6 +132,8 @@ export function createUiStore() {
     initTypeOrderIfEmpty,
     eventOrderByType,
     setEventOrderForType,
+    scheduledTemplateIds,
+    setScheduledTemplateIds,
   };
 }
 
