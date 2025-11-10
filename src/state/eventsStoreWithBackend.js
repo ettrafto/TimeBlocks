@@ -27,6 +27,7 @@ function toBackendEvent(event, calendarId = 'cal_main') {
     id: event.id,
     calendarId,
     libraryEventId: event.libraryEventId || null,
+    taskId: event.templateTaskId || null,
     typeId: event.typeId || null,
     title: event.label || event.name || 'Untitled',
     notes: event.notes || null,

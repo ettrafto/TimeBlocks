@@ -7,6 +7,7 @@ public class Event {
     @Id private String id;
     @Column(name="calendar_id", nullable=false) private String calendarId;
     @Column(name="library_event_id") private String libraryEventId;
+    @Column(name="task_id") private String taskId;
     @Column(name="type_id") private String typeId;
     private String title;
     private String notes;
@@ -27,6 +28,9 @@ public class Event {
 
     public String getLibraryEventId() { return libraryEventId; }
     public void setLibraryEventId(String libraryEventId) { this.libraryEventId = libraryEventId; }
+
+    public String getTaskId() { return taskId; }
+    public void setTaskId(String taskId) { this.taskId = taskId; }
 
     public String getTypeId() { return typeId; }
     public void setTypeId(String typeId) { this.typeId = typeId; }

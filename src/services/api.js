@@ -128,6 +128,7 @@ export const scheduledEventsApi = {
     // Map occurrences -> event rows the store expects (id/title/startUtc/endUtc/typeId)
     return Array.isArray(occs) ? occs.map(o => ({
       id: o.event_id,
+      taskId: o.taskId ?? null,
       title: o.title,
       startUtc: o.start,
       endUtc: o.end,
@@ -137,32 +138,39 @@ export const scheduledEventsApi = {
   },
 
   // Create an event (translate to backend payload)
-  create: (event) => apiRequest(`/api/events`, {
+  create: (event) => apiRequest(`/api/calendars/${encodeURIComponent(event.calendarId || CALENDAR_ID)}/scheduled-events`, {
     method: 'POST',
     body: {
-      calendar_id: event.calendarId || CALENDAR_ID,
+      id: event.id,
       title: event.title,
-      start: event.startUtc,
-      end: event.endUtc,
-      type_id: event.typeId ?? null,
-      color: event.color ?? null,
+      startUtc: event.startUtc,
+      endUtc: event.endUtc,
+      tzid: event.tzid || 'UTC',
+      isAllDay: event.isAllDay ?? 0,
+      typeId: event.typeId ?? null,
+      taskId: event.taskId ?? null,
+      notes: event.color ?? null,
     },
   }),
 
   // Update an event by id (partial)
-  update: (id, event) => apiRequest(`/api/events/${encodeURIComponent(id)}`, {
-    method: 'PATCH',
+  update: (id, event) => apiRequest(`/api/scheduled-events/${encodeURIComponent(id)}`, {
+    method: 'PUT',
     body: {
+      id,
       title: event.title,
-      start: event.startUtc,
-      end: event.endUtc,
-      type_id: event.typeId ?? null,
-      color: event.color ?? null,
+      startUtc: event.startUtc,
+      endUtc: event.endUtc,
+      tzid: event.tzid || 'UTC',
+      isAllDay: event.isAllDay ?? 0,
+      typeId: event.typeId ?? null,
+      taskId: event.taskId ?? null,
+      notes: event.color ?? null,
     },
   }),
 
   // Delete an event by id
-  delete: (id) => apiRequest(`/api/events/${encodeURIComponent(id)}`, {
+  delete: (id) => apiRequest(`/api/scheduled-events/${encodeURIComponent(id)}`, {
     method: 'DELETE',
   }),
 };

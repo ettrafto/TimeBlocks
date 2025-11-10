@@ -74,12 +74,27 @@ public class ScheduleController {
         if (dto.getEndTsUtc() == null || dto.getStartTsUtc() == null || dto.getEndTsUtc() <= dto.getStartTsUtc()) {
             return ResponseEntity.badRequest().build();
         }
+        // Ensure we have an associated task id
         if (dto.getId() == null || dto.getId().isBlank()) {
             dto.setId(UUID.randomUUID().toString());
         }
         if (dto.getCreatedAt() == null) dto.setCreatedAt(System.currentTimeMillis());
         if (dto.getUpdatedAt() == null) dto.setUpdatedAt(System.currentTimeMillis());
         Schedule saved = schedules.save(dto);
+
+        // Mark the related task as scheduled (persistent flag)
+        try {
+            Integer taskIdInt = null;
+            try { taskIdInt = saved.getTaskId() != null ? Integer.parseInt(saved.getTaskId()) : null; } catch (NumberFormatException ignored) {}
+            if (taskIdInt != null) {
+                tasks.findById(taskIdInt).ifPresent(t -> {
+                    if (Boolean.FALSE.equals(t.getScheduled())) {
+                        t.setScheduled(true);
+                        tasks.save(t);
+                    }
+                });
+            }
+        } catch (Exception ignored) {}
         return ResponseEntity.ok(saved);
     }
 
@@ -91,6 +106,7 @@ public class ScheduleController {
         Optional<Schedule> opt = schedules.findById(id);
         if (opt.isEmpty()) return ResponseEntity.notFound().build();
         Schedule s = opt.get();
+        String oldTaskId = s.getTaskId();
         if (patch.containsKey("taskId")) s.setTaskId(String.valueOf(patch.get("taskId")));
         if (patch.containsKey("start")) s.setStartTsUtc(((Number)patch.get("start")).longValue());
         if (patch.containsKey("end")) s.setEndTsUtc(((Number)patch.get("end")).longValue());
@@ -102,7 +118,38 @@ public class ScheduleController {
         if (patch.containsKey("meta")) s.setMeta((String)patch.get("meta"));
         if (s.getEndTsUtc() <= s.getStartTsUtc()) return ResponseEntity.badRequest().build();
         s.setUpdatedAt(System.currentTimeMillis());
-        return ResponseEntity.ok(schedules.save(s));
+        Schedule saved = schedules.save(s);
+
+        // Maintain scheduled flag if task link changed
+        try {
+            String newTaskId = saved.getTaskId();
+            if (newTaskId != null && !newTaskId.equals(oldTaskId)) {
+                // Set new task as scheduled
+                try {
+                    Integer newTaskInt = Integer.parseInt(newTaskId);
+                    tasks.findById(newTaskInt).ifPresent(t -> {
+                        if (Boolean.FALSE.equals(t.getScheduled())) {
+                            t.setScheduled(true);
+                            tasks.save(t);
+                        }
+                    });
+                } catch (NumberFormatException ignored) {}
+                // Potentially clear old task if no remaining schedules
+                if (oldTaskId != null && schedules.countByTaskId(oldTaskId) == 0) {
+                    try {
+                        Integer oldTaskInt = Integer.parseInt(oldTaskId);
+                        tasks.findById(oldTaskInt).ifPresent(t -> {
+                            if (Boolean.TRUE.equals(t.getScheduled())) {
+                                t.setScheduled(false);
+                                tasks.save(t);
+                            }
+                        });
+                    } catch (NumberFormatException ignored) {}
+                }
+            }
+        } catch (Exception ignored) {}
+
+        return ResponseEntity.ok(saved);
     }
 
     // =============================
@@ -114,8 +161,26 @@ public class ScheduleController {
         TBLog.groupStart("DELETE /api/schedules/{id}", cid);
         try {
             TBLog.kv("Path", Map.of("id", id));
-            if (!schedules.existsById(id)) return ResponseEntity.notFound().build();
+            Optional<Schedule> toDelete = schedules.findById(id);
+            if (toDelete.isEmpty()) return ResponseEntity.notFound().build();
+            Schedule s = toDelete.get();
+            String taskId = s.getTaskId();
             schedules.deleteById(id);
+            // After deletion, update task.scheduled if needed
+            try {
+                if (taskId != null && schedules.countByTaskId(taskId) == 0) {
+                    Integer taskInt = null;
+                    try { taskInt = Integer.parseInt(taskId); } catch (NumberFormatException ignored) {}
+                    if (taskInt != null) {
+                        tasks.findById(taskInt).ifPresent(t -> {
+                            if (Boolean.TRUE.equals(t.getScheduled())) {
+                                t.setScheduled(false);
+                                tasks.save(t);
+                            }
+                        });
+                    }
+                }
+            } catch (Exception ignored) {}
             TBLog.info("Deleted schedule", Map.of("id", id));
             return ResponseEntity.ok(Map.of("ok", true));
         } catch (Exception e) {

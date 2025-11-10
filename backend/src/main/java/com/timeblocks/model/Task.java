@@ -31,6 +31,9 @@ public class Task {
     @Column(name = "created_at")
     private LocalDateTime createdAt;
     
+    @Column(name = "scheduled", nullable = false)
+    private Boolean scheduled = false;
+    
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();
@@ -91,6 +94,14 @@ public class Task {
 
     public void setAttachedDate(LocalDate attachedDate) {
         this.attachedDate = attachedDate;
+    }
+
+    public Boolean getScheduled() {
+        return scheduled;
+    }
+
+    public void setScheduled(Boolean scheduled) {
+        this.scheduled = scheduled;
     }
 }
 

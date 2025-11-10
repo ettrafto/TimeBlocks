@@ -11,5 +11,7 @@ public interface EventRepository extends JpaRepository<Event, String> {
     List<Event> findForWindow(@Param("calId") String calendarId,
                               @Param("from") String fromIso,
                               @Param("to") String toIso);
+
+    long countByTaskId(String taskId);
 }
 

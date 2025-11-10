@@ -1,7 +1,6 @@
 package com.timeblocks.web;
 
 import com.timeblocks.model.Event;
-import com.timeblocks.model.EventOccurrence;
 import com.timeblocks.repo.EventRepository;
 import com.timeblocks.service.OccurrenceService;
 import org.springframework.web.bind.annotation.*;
@@ -36,6 +35,7 @@ public class CalendarController {
             Map<String,Object> dto = new LinkedHashMap<>();
             dto.put("id", stableId);
             dto.put("event_id", e.getId());
+            dto.put("taskId", e.getTaskId());
             dto.put("title", e.getTitle());
             dto.put("start", e.getStartUtc());
             dto.put("end", e.getEndUtc());

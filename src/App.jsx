@@ -2165,6 +2165,7 @@ function App() {
             startMinutes: startMin,
             duration: dur,
             typeId: o.typeId ?? null,
+            templateTaskId: o.taskId ? String(o.taskId) : undefined,
           };
         });
         console.log('🗂️ Mapped scheduledItems', { count: mapped.length, days: [...new Set(mapped.map(m => m.dateKey))] });

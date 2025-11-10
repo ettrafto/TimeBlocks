@@ -8,9 +8,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
-import java.time.LocalDate;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -20,9 +17,11 @@ import java.util.UUID;
 @RequestMapping("/api")
 public class ScheduledEventController {
     private final EventRepository eventRepo;
+    private final com.timeblocks.repo.TaskRepository taskRepo;
 
-    public ScheduledEventController(EventRepository eventRepo) {
+    public ScheduledEventController(EventRepository eventRepo, com.timeblocks.repo.TaskRepository taskRepo) {
         this.eventRepo = eventRepo;
+        this.taskRepo = taskRepo;
     }
 
     @GetMapping("/calendars/{calendarId}/scheduled-events")
@@ -86,6 +85,20 @@ public class ScheduledEventController {
             }
             
             Event saved = eventRepo.save(event);
+
+            // If linked to a task, set the scheduled flag true
+            try {
+                Integer taskIdInt = null;
+                try { taskIdInt = saved.getTaskId() != null ? Integer.parseInt(saved.getTaskId()) : null; } catch (NumberFormatException ignored) {}
+                if (taskIdInt != null) {
+                    taskRepo.findById(taskIdInt).ifPresent(t -> {
+                        if (Boolean.FALSE.equals(t.getScheduled())) {
+                            t.setScheduled(true);
+                            taskRepo.save(t);
+                        }
+                    });
+                }
+            } catch (Exception ignored) {}
             
             Map<String, Object> dbResult = new HashMap<>();
             dbResult.put("id", saved.getId());
@@ -108,8 +121,36 @@ public class ScheduledEventController {
         if (!eventRepo.existsById(id)) {
             return ResponseEntity.notFound().build();
         }
+        Event prev = eventRepo.findById(id).orElse(null);
+        String oldTaskId = prev != null ? prev.getTaskId() : null;
         event.setId(id);
         Event updated = eventRepo.save(event);
+        // Maintain task.scheduled if task link changed
+        try {
+            String newTaskId = updated.getTaskId();
+            if (newTaskId != null && !newTaskId.equals(oldTaskId)) {
+                try {
+                    Integer newTaskInt = Integer.parseInt(newTaskId);
+                    taskRepo.findById(newTaskInt).ifPresent(t -> {
+                        if (Boolean.FALSE.equals(t.getScheduled())) {
+                            t.setScheduled(true);
+                            taskRepo.save(t);
+                        }
+                    });
+                } catch (NumberFormatException ignored) {}
+                if (oldTaskId != null && eventRepo.countByTaskId(oldTaskId) == 0) {
+                    try {
+                        Integer oldTaskInt = Integer.parseInt(oldTaskId);
+                        taskRepo.findById(oldTaskInt).ifPresent(t -> {
+                            if (Boolean.TRUE.equals(t.getScheduled())) {
+                                t.setScheduled(false);
+                                taskRepo.save(t);
+                            }
+                        });
+                    } catch (NumberFormatException ignored) {}
+                }
+            }
+        } catch (Exception ignored) {}
         return ResponseEntity.ok(updated);
     }
 
@@ -122,12 +163,28 @@ public class ScheduledEventController {
             params.put("id", id);
             TBLog.kv("Delete params", params);
             
-            if (!eventRepo.existsById(id)) {
+            Event existing = eventRepo.findById(id).orElse(null);
+            if (existing == null) {
                 TBLog.warn("Event not found for deletion: {}", id);
                 return ResponseEntity.notFound().build();
             }
-            
+            String taskId = existing.getTaskId();
             eventRepo.deleteById(id);
+            // If linked to task, and no remaining events, clear flag
+            try {
+                if (taskId != null && eventRepo.countByTaskId(taskId) == 0) {
+                    Integer taskInt = null;
+                    try { taskInt = Integer.parseInt(taskId); } catch (NumberFormatException ignored) {}
+                    if (taskInt != null) {
+                        taskRepo.findById(taskInt).ifPresent(t -> {
+                            if (Boolean.TRUE.equals(t.getScheduled())) {
+                                t.setScheduled(false);
+                                taskRepo.save(t);
+                            }
+                        });
+                    }
+                }
+            } catch (Exception ignored) {}
             TBLog.info("Deleted scheduled event: {}", id);
             
             return ResponseEntity.noContent().build();

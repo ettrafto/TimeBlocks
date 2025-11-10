@@ -10,7 +10,10 @@ function normalizeTask(row) {
   const attached_date = typeof row.attached_date === 'string'
     ? row.attached_date
     : (typeof row.attachedDate === 'string' ? row.attachedDate : null);
-  return { ...row, type_id, attached_date };
+  const scheduled = typeof row.scheduled === 'boolean'
+    ? row.scheduled
+    : (row.scheduled === 1 || row.scheduled === '1' || row.scheduled === 'true');
+  return { ...row, type_id, attached_date, scheduled };
 }
 
 const useCreatePageStore = create((set, get) => ({

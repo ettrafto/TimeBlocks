@@ -57,7 +57,7 @@ export default function SortableEventRow({ event, typeId }) {
     duration: event.duration || 30,
     typeId: event.type_id != null ? String(event.type_id) : (event.typeId != null ? String(event.typeId) : String(typeId)),
   };
-  const isScheduled = !!ui?.scheduledTemplateIds?.[String(task.id)];
+  const isScheduled = !!(ui?.scheduledTemplateIds?.[String(task.id)] || event?.scheduled);
 
   const style = {
     transform: CSS.Transform.toString(transform),
