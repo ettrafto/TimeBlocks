@@ -54,7 +54,7 @@ export default function SortableEventRow({ event, typeId }) {
     label: event.title || event.name || 'Untitled',
     bgColor: bg,
     textColor: text,
-    duration: event.duration || 30,
+    duration: Number.isFinite(Number(event.duration)) ? Number(event.duration) : 30,
     typeId: event.type_id != null ? String(event.type_id) : (event.typeId != null ? String(event.typeId) : String(typeId)),
   };
   const isScheduled = !!(ui?.scheduledTemplateIds?.[String(task.id)] || event?.scheduled);

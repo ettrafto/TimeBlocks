@@ -54,6 +54,8 @@ import { useCreatePageStore } from './store/createPageStore';
 import { hexToHsl, readableTextOn, tailwindToHex, withSaturation, withLightness, hslToString } from './components/Create/colorUtils.js';
 import { useScheduleStore } from './stores/scheduleStore';
 import { scheduleClient } from './lib/api/scheduleClient';
+import Profile from './pages/Profile.jsx';
+import Settings from './pages/Settings.jsx';
 
 // ========================================
 // PHASE 1 DIAGNOSTICS - Duplicate Draggable Detection
@@ -2685,6 +2687,17 @@ function App() {
           .then(() => console.info('✅ updateEventTime (resize) queued'))
           .catch((e) => console.warn('⚠️ updateEventTime (resize) failed', e));
       } catch (e) { console.warn('⚠️ Persist resize threw', e); }
+      // Also persist the new duration back to the source task so sidebar reflects it on reload
+      try {
+        const taskId = updated.templateTaskId || updated.taskId;
+        const minutes = Number(duration);
+        if (taskId && Number.isFinite(Number(taskId)) && Number.isFinite(minutes)) {
+          console.info('📝 Updating task duration from resize', { taskId, minutes });
+          try { Promise.resolve(useCreatePageStore.getState().updateTask(Number(taskId), { duration: minutes })).catch(() => {}); } catch {}
+        }
+      } catch (e) {
+        console.warn('⚠️ Failed to update task duration after resize', e);
+      }
     }
 
     // Cleanup
@@ -3288,7 +3301,6 @@ function App() {
   // Determine active view from pathname
   const getActiveView = () => {
     if (location.pathname === '/create') return 'create';
-    if (location.pathname === '/admin/diagnostics') return 'settings';
     return activeView;
   };
 
@@ -3311,6 +3323,42 @@ function App() {
 
   if (location.pathname === '/debug/logs') {
     return <Logs />;
+  }
+
+  if (location.pathname === '/profile') {
+    return (
+      <>
+        <TopNav 
+          activeView="calendar"
+          onViewChange={(view) => {
+            if (view === 'create') navigate('/create');
+            else if (view === 'calendar') navigate('/');
+            else navigate('/');
+          }}
+          onQuickAdd={() => {}}
+          onToggleSidebar={() => layoutStore.toggle()}
+        />
+        <Profile />
+      </>
+    );
+  }
+
+  if (location.pathname === '/settings') {
+    return (
+      <>
+        <TopNav 
+          activeView="calendar"
+          onViewChange={(view) => {
+            if (view === 'create') navigate('/create');
+            else if (view === 'calendar') navigate('/');
+            else navigate('/');
+          }}
+          onQuickAdd={() => {}}
+          onToggleSidebar={() => layoutStore.toggle()}
+        />
+        <Settings />
+      </>
+    );
   }
 
   if (location.pathname === '/create') {
@@ -3395,7 +3443,6 @@ function App() {
             <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-8 text-center">
               <h2 className="text-2xl font-bold text-gray-800 mb-4">
                 {activeView === 'home' && '🏠 Home'}
-                {activeView === 'settings' && '⚙️ Settings'}
               </h2>
               <p className="text-gray-600 mb-4">
                 This view is coming soon!

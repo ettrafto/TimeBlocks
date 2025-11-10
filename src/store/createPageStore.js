@@ -13,7 +13,8 @@ function normalizeTask(row) {
   const scheduled = typeof row.scheduled === 'boolean'
     ? row.scheduled
     : (row.scheduled === 1 || row.scheduled === '1' || row.scheduled === 'true');
-  return { ...row, type_id, attached_date, scheduled };
+  const duration = Number.isFinite(Number(row.duration)) ? Number(row.duration) : 30;
+  return { ...row, type_id, attached_date, scheduled, duration };
 }
 
 const useCreatePageStore = create((set, get) => ({
@@ -89,7 +90,7 @@ const useCreatePageStore = create((set, get) => ({
   addTask: async (p) => {
     try {
       // Use shared tasks client like API-testing page (handles validation/shape)
-      const task = await tasksClient.createTask({ type_id: p.type_id, title: p.title, description: p.description, status: p.status });
+      const task = await tasksClient.createTask({ type_id: p.type_id, title: p.title, description: p.description, status: p.status, duration: p.duration });
       const t = normalizeTask(task);
       set((s) => ({ 
         tasksByType: { 

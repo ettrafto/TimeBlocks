@@ -24,6 +24,9 @@ public class Task {
     @Column(nullable = false)
     private String status = "todo";
 
+    @Column(name = "duration")
+    private Integer duration; // minutes
+
     @Column(name = "attached_date")
     @JsonAlias({"attached_date", "attachedDate"})
     private LocalDate attachedDate;
@@ -80,6 +83,14 @@ public class Task {
         this.status = status;
     }
     
+    public Integer getDuration() {
+        return duration;
+    }
+
+    public void setDuration(Integer duration) {
+        this.duration = duration;
+    }
+
     public LocalDateTime getCreatedAt() {
         return createdAt;
     }

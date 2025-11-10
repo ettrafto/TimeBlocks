@@ -63,6 +63,7 @@ public class TaskController {
             payload.put("title", task.getTitle());
             payload.put("description", task.getDescription());
             payload.put("status", task.getStatus());
+            payload.put("duration", task.getDuration());
             payload.put("attached_date", task.getAttachedDate());
             TBLog.kv("Payload", payload);
             
@@ -106,6 +107,14 @@ public class TaskController {
             }
             if (updates.containsKey("status")) {
                 task.setStatus((String) updates.get("status"));
+            }
+            if (updates.containsKey("duration")) {
+                Object v = updates.get("duration");
+                if (v != null) {
+                    task.setDuration(((Number)v).intValue());
+                } else {
+                    task.setDuration(null);
+                }
             }
             if (updates.containsKey("type_id")) {
                 task.setTypeId(((Number) updates.get("type_id")).intValue());
