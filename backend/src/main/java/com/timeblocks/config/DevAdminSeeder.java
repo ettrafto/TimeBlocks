@@ -43,17 +43,31 @@ public class DevAdminSeeder implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        if (userRepository.existsByEmail(seedEmail)) {
-            return;
-        }
-        User admin = new User();
-        admin.setEmail(seedEmail);
-        admin.setName("Admin");
-        admin.setRole(UserRole.ADMIN);
-        admin.setPasswordHash(passwordEncoder.encode(seedPassword));
-        admin.setEmailVerifiedAt(java.time.LocalDateTime.now());
-        userRepository.save(admin);
-        log.info("Seeded development admin account {}", seedEmail);
+        userRepository.findByEmail(seedEmail).ifPresentOrElse(existing -> {
+            existing.setEmail(seedEmail);
+            existing.setRole(UserRole.ADMIN);
+            existing.setName(existing.getName() == null || existing.getName().isBlank() ? "Admin" : existing.getName());
+            existing.setPasswordHash(passwordEncoder.encode(seedPassword));
+            if (existing.getEmailVerifiedAt() == null) {
+                existing.setEmailVerifiedAt(java.time.LocalDateTime.now());
+            }
+            userRepository.saveAndFlush(existing);
+            log.info("[DevAdminSeeder] Refreshed development admin account {} with password {}", seedEmail, seedPassword);
+        }, () -> {
+            User admin = new User();
+            admin.setEmail(seedEmail);
+            admin.setName("Admin");
+            admin.setRole(UserRole.ADMIN);
+            admin.setPasswordHash(passwordEncoder.encode(seedPassword));
+            admin.setEmailVerifiedAt(java.time.LocalDateTime.now());
+            userRepository.saveAndFlush(admin);
+            log.info("[DevAdminSeeder] Seeded development admin account {} with password {}", seedEmail, seedPassword);
+        });
+        userRepository.findByEmail(seedEmail).ifPresent(user -> {
+            log.info("[DevAdminSeeder] state => email={} role={} verifiedAt={} createdAt={} updatedAt={}",
+                    user.getEmail(), user.getRole(), user.getEmailVerifiedAt(),
+                    user.getCreatedAt(), user.getUpdatedAt());
+        });
     }
 }
 

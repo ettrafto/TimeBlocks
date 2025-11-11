@@ -61,3 +61,14 @@ tasks.register("devCleanDb") {
     }
 }
 
+tasks.register<JavaExec>("seedAdmin") {
+    group = "dev"
+    description = "Seeds or refreshes the development admin account"
+    mainClass.set("com.timeblocks.cli.SeedAdminCli")
+    classpath = sourceSets["main"].runtimeClasspath
+    javaLauncher.set(javaToolchains.launcherFor {
+        languageVersion.set(JavaLanguageVersion.of(21))
+    })
+    environment("SPRING_PROFILES_ACTIVE", "dev")
+}
+

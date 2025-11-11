@@ -2016,17 +2016,21 @@ function App() {
   const navigate = useNavigate();
 
   const authRoutes = ['/login', '/signup', '/verify-email', '/reset-password'];
-  const publicRoutes = ['/api-testing', '/'];
+  const publicRoutes = ['/'];
   const isAuthRoute = authRoutes.includes(location.pathname);
-  const isPublicRoute = publicRoutes.some((route) => {
-    if (route === '/') {
-      return location.pathname === '/';
-    }
-    return location.pathname === route || location.pathname.startsWith(route + '/');
-  });
+  const isPublicRoute = publicRoutes.includes(location.pathname);
 
-  useHydrateAuth(!isPublicRoute);
+  useHydrateAuth();
   const authStatus = useAuthStore((state) => state.status);
+
+  React.useEffect(() => {
+    console.debug('[AuthGate]', {
+      path: location.pathname,
+      authStatus,
+      isAuthRoute,
+      isPublicRoute,
+    });
+  }, [location.pathname, authStatus, isAuthRoute, isPublicRoute]);
 
   React.useEffect(() => {
     if (authStatus === 'authenticated' && isAuthRoute) {

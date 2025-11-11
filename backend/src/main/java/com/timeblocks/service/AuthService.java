@@ -32,6 +32,7 @@ public class AuthService {
     private final AuthNotificationService notificationService;
     private final AuthenticationManager authenticationManager;
     private final SecureRandom secureRandom = new SecureRandom();
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AuthService.class);
 
     public AuthService(
             UserRepository userRepository,
@@ -112,11 +113,17 @@ public class AuthService {
 
     @Transactional
     public LoginResult login(String email, String password) {
+        String normalized = email.toLowerCase(Locale.ROOT);
+        log.debug("[AuthService][login] attempt normalizedEmail={} rawEmail={}", normalized, email);
         Authentication auth = authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(email.toLowerCase(Locale.ROOT), password));
+                new UsernamePasswordAuthenticationToken(normalized, password));
+        log.debug("[AuthService][login] authenticationManager returned principal={}", auth.getPrincipal());
         AppUserDetails principal = (AppUserDetails) auth.getPrincipal();
         User user = principal.getUser();
+        log.debug("[AuthService][login] principal user id={} email={} verifiedAt={} role={}",
+                user.getId(), user.getEmail(), user.getEmailVerifiedAt(), user.getRole());
         if (user.getEmailVerifiedAt() == null) {
+            log.warn("[AuthService][login] email not verified userId={} email={}", user.getId(), user.getEmail());
             throw new IllegalStateException("Email not verified");
         }
         String accessToken = jwtService.generateAccessToken(user.getId(), java.util.Map.of(
@@ -124,6 +131,8 @@ public class AuthService {
                 "email", user.getEmail()
         ));
         RefreshTokenPair refreshTokenPair = refreshTokenService.issue(user);
+        log.info("[AuthService][login] success userId={} email={} role={} verifiedAt={}",
+                user.getId(), user.getEmail(), user.getRole(), user.getEmailVerifiedAt());
         return new LoginResult(user, accessToken, refreshTokenPair);
     }
 

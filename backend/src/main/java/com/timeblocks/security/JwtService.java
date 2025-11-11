@@ -9,6 +9,9 @@ import io.jsonwebtoken.security.Keys;
 import org.springframework.stereotype.Component;
 
 import javax.crypto.SecretKey;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -46,14 +49,28 @@ public class JwtService {
         if (secret == null || secret.isBlank()) {
             secret = UUID.randomUUID().toString().replace("-", "");
         }
-        if (secret.length() < 32) {
-            return io.jsonwebtoken.io.Encoders.BASE64.encode(secret.getBytes());
+        byte[] decoded = decodeMaybe(secret);
+        if (decoded.length < 64) {
+            return strengthen(decoded);
         }
+        return io.jsonwebtoken.io.Encoders.BASE64.encode(decoded);
+    }
+
+    private String strengthen(byte[] seed) {
         try {
-            Decoders.BASE64.decode(secret);
-            return secret;
+            MessageDigest sha512 = MessageDigest.getInstance("SHA-512");
+            byte[] derived = sha512.digest(seed);
+            return io.jsonwebtoken.io.Encoders.BASE64.encode(derived);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-512 not available", e);
+        }
+    }
+
+    private byte[] decodeMaybe(String secret) {
+        try {
+            return Decoders.BASE64.decode(secret);
         } catch (IllegalArgumentException ex) {
-            return io.jsonwebtoken.io.Encoders.BASE64.encode(secret.getBytes());
+            return secret.getBytes(StandardCharsets.UTF_8);
         }
     }
 

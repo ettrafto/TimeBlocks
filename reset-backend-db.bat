@@ -55,6 +55,18 @@ for %%F in ("%DB%-shm" "%DB%-wal") do (
     )
 )
 
+if "%ERR%"=="0" (
+    echo.
+    echo Running admin seeder to ensure default credentials are available...
+    call gradlew.bat seedAdmin >nul
+    if errorlevel 1 (
+        echo ERROR: Failed to seed the development admin account.
+        set "ERR=1"
+    ) else (
+        echo Admin credentials ready: admin@local.test / Admin123!
+    )
+)
+
 echo.
 if "%ERR%"=="0" (
     echo Reset complete. The database will be recreated on next backend start.

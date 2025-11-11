@@ -39,7 +39,12 @@ export async function http(path, opts = {}) {
   const attempt = async () => {
     if (method !== 'GET' && typeof document !== 'undefined' && !headers['X-XSRF-TOKEN']) {
       const csrfToken = getCookie('XSRF-TOKEN');
-      if (csrfToken) headers['X-XSRF-TOKEN'] = csrfToken;
+      if (csrfToken) {
+        headers['X-XSRF-TOKEN'] = csrfToken;
+        console.debug('[HTTP] attaching CSRF token', { path, method, csrfToken });
+      } else {
+        console.warn('[HTTP] missing CSRF token cookie before request', { path, method });
+      }
     }
 
     const init = {

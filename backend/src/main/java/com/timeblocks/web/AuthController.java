@@ -25,6 +25,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.csrf.CsrfToken;
@@ -94,7 +95,7 @@ public class AuthController {
     }
 
     @PostMapping("/login")
-    public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest request,
+    public ResponseEntity<?> login(@Valid @RequestBody LoginRequest request,
                                               HttpServletRequest servletRequest,
                                               HttpServletResponse response) {
         String cid = correlationId(servletRequest);
@@ -107,9 +108,24 @@ public class AuthController {
             UserResponse userResponse = UserResponse.from(loginResult.user());
             log.info("[Auth][Login][cid={}] success userId={} email={}", cid, userResponse.id(), userResponse.email());
             return ResponseEntity.ok(AuthResponse.of(userResponse));
+        } catch (BadCredentialsException ex) {
+            log.warn("[Auth][Login][cid={}] bad credentials email={}", cid, request.email());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(java.util.Map.of(
+                    "error", "bad_credentials",
+                    "message", "Invalid email or password"
+            ));
+        } catch (IllegalStateException ex) {
+            log.warn("[Auth][Login][cid={}] blocked email={} reason={}", cid, request.email(), ex.getMessage());
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(java.util.Map.of(
+                    "error", "login_blocked",
+                    "message", ex.getMessage()
+            ));
         } catch (RuntimeException ex) {
             log.warn("[Auth][Login][cid={}] failure email={} reason={}", cid, request.email(), ex.getMessage());
-            throw ex;
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(java.util.Map.of(
+                    "error", "login_error",
+                    "message", ex.getMessage()
+            ));
         }
     }
 

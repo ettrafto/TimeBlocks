@@ -7,7 +7,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -29,14 +28,19 @@ public class SelfCheckController {
     var end = now.plusSeconds(1800);
     Event row = events.create(cal, idTitle, now, end, null, null, null);
 
-    Optional<Event> fetched = repo.findById(row.getId());
+    String eventId = row.getId();
+    if (eventId == null) {
+      throw new IllegalStateException("Event ID not generated during self-check creation");
+    }
+
+    Optional<Event> fetched = repo.findById(eventId);
     long count = repo.count();
-    return ResponseEntity.ok(Map.of(
-      "created_id", row.getId(),
-      "found_after_create", fetched.isPresent(),
-      "total_events", count
-    ));
+
+    UUID createdId = UUID.fromString(eventId);
+    return ResponseEntity.ok(new SelfCheckResult(createdId, fetched.isPresent(), count));
   }
+
+  private record SelfCheckResult(UUID createdId, boolean foundAfterCreate, long totalEvents) {}
 }
 
 

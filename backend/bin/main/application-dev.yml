@@ -35,7 +35,7 @@ auth:
     max: ${RATE_LIMIT_MAX:20}
   cookie-domain: ${COOKIE_DOMAIN:}
   cookie-secure: false
-  cookie-same-site: Lax
+  cookie-same-site: None
   notifications:
     log-codes: true
 
