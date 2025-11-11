@@ -15,7 +15,14 @@ An experimental time-blocking calendar built with React and @dnd-kit/core with S
 
 ### 1) Backend Setup
 
-1. **Start the backend:**
+1. **Configure environment variables:**
+   ```bash
+   cd backend
+   cp ../config/env.example .env
+   ```
+   Update the values as needed (the defaults work for local development).
+
+2. **Start the backend:**
    ```bash
    # Windows
    cd backend
@@ -26,13 +33,15 @@ An experimental time-blocking calendar built with React and @dnd-kit/core with S
    ./gradlew bootRun --args='--spring.profiles.active=dev'
    ```
 
-2. **Verify backend is running:**
+   A development admin account is seeded automatically (`admin@local.test` / `Admin123!`).
+
+3. **Verify backend is running:**
    ```bash
    curl http://localhost:8080/api/health
    ```
    Expected response: `{"ok":true,"service":"timeblocks-backend"}`
 
-3. **Check backend logs:**
+4. **Check backend logs:**
    - Request lines: `➡ GET /api/health [5ms] status=200`
    - Hibernate SQL: `Hibernate: select ...` with bound parameters (TRACE level)
 
@@ -92,10 +101,23 @@ An experimental time-blocking calendar built with React and @dnd-kit/core with S
 - ✅ Backend health endpoint responds: `curl http://localhost:8080/api/health`
 - ✅ Backend logs show request traces: `➡ GET /api/... [ms] status=...`
 - ✅ Backend logs show SQL queries with bound parameters (TRACE level)
+- ✅ Auth endpoints work: signup → verification → login → refresh → logout → reset password
 - ✅ Create page shows health status
 - ✅ Create page lists Types (or empty list without crashing)
 - ✅ Create page lists Scheduled Events (or empty list without crashing)
 - ✅ Calendar view doesn't crash when backend is offline
+
+## Authentication Overview
+
+- **Signup** (`/signup`) → creates user and logs verification code to the backend console (dev only).
+- **Verify email** (`/verify-email`) → required before login.
+- **Login** (`/login`) → issues short-lived access token + long-lived refresh token (httpOnly cookies).
+- **Refresh** (`/api/auth/refresh`) → refresh token rotation, single-use with server-side revocation.
+- **Logout** (`/api/auth/logout`) → revokes current refresh token.
+- **Password reset** (`/reset-password`) → request + submit code to set a new password.
+
+All existing API routes (`/api/events`, `/api/tasks`, `/api/types`, etc.) now require authentication.  
+Use the API-testing page to validate protected requests under an authenticated session.
 
 ## How It Works
 

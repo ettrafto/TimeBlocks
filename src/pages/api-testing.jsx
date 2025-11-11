@@ -4,6 +4,9 @@ import { useTasksStore } from "../state/tasksStore.js";
 import { eventsStore } from "../state/eventsStoreWithBackend.js";
 import DebugNav from "../debug/components/DebugNav";
 import log from "../lib/logger";
+import http from "../lib/api/http";
+import * as authApi from "../auth/api";
+import { useAuthStore } from "../auth/store";
 
 // Icons (outline, consistent with Create page)
 const EditIcon = () => (
@@ -21,6 +24,104 @@ export default function ApiTestingPage() {
   const { items: types, loading: typesLoading, error: typesError, loadAll: loadTypes, create: createType, update: updateType, remove: removeType, counts: typeCounts } = useTypesStore();
   const orderedTypes = useTypesOrdered();
   const { loadAll: loadTasks, loadSubtasks, tasks, tasksForType, byTypeId, subtasksForTask, createTask, updateTask, removeTask, addSubtask, updateSubtask, removeSubtask, loading: tasksLoading, error: tasksError } = useTasksStore();
+  const auth = useAuthStore((state) => ({
+    user: state.user,
+    status: state.status,
+    error: state.error,
+    login: state.login,
+    logout: state.logout,
+    hydrate: state.hydrate,
+    signup: state.signup,
+    verifyEmail: state.verifyEmail,
+    requestPasswordReset: state.requestPasswordReset,
+    resetPassword: state.resetPassword,
+  }));
+  const [authEmail, setAuthEmail] = useState("user@test.local");
+  const [authPassword, setAuthPassword] = useState("Password123!");
+  const [signupName, setSignupName] = useState("Test User");
+  const [verifyCode, setVerifyCode] = useState("");
+  const [resetCode, setResetCode] = useState("");
+  const [newPassword, setNewPassword] = useState("NewPassword123!");
+  const [accountLog, setAccountLog] = useState([]);
+
+  const describeError = (err) => {
+    if (!err) return null;
+    if (typeof err === "string") return err;
+    if (err.status && err.message) return `${err.status} ${err.message}`;
+    if (err.message) return err.message;
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return String(err);
+    }
+  };
+
+  const pushAccountLog = (label, payload, error) => {
+    setAccountLog((prev) => [
+      {
+        ts: new Date().toISOString(),
+        label,
+        payload: payload ?? null,
+        error: describeError(error),
+      },
+      ...prev,
+    ].slice(0, 50));
+  };
+
+  const runAccountAction = async (label, action) => {
+    try {
+      const result = await action();
+      pushAccountLog(label, result ?? null, null);
+      return result;
+    } catch (err) {
+      pushAccountLog(label, null, err);
+      return null;
+    }
+  };
+
+  const handleFetchCsrf = async () => {
+    await runAccountAction("Fetch CSRF", () => http("/api/auth/csrf", { method: "GET" }));
+  };
+
+  const handleSignup = async () => {
+    await runAccountAction("Signup", () => auth.signup(authEmail, authPassword, signupName));
+  };
+
+  const handleVerifyEmail = async () => {
+    await runAccountAction("Verify Email", () => auth.verifyEmail(authEmail, verifyCode));
+  };
+
+  const handleLogin = async () => {
+    await runAccountAction("Login", () => auth.login(authEmail, authPassword));
+  };
+
+  const handleRefresh = async () => {
+    await runAccountAction("Refresh Tokens", async () => {
+      await authApi.refresh();
+      return { ok: true };
+    });
+    await auth.hydrate(true);
+  };
+
+  const handleFetchMe = async () => {
+    await runAccountAction("/api/auth/me", () => authApi.me());
+  };
+
+  const handleLogout = async () => {
+    await runAccountAction("Logout", () => auth.logout());
+  };
+
+  const handleRequestReset = async () => {
+    await runAccountAction("Request Password Reset", () => auth.requestPasswordReset(authEmail));
+  };
+
+  const handleResetPassword = async () => {
+    await runAccountAction("Reset Password", () => auth.resetPassword(authEmail, resetCode, newPassword));
+  };
+
+  const handleHydrate = async () => {
+    await runAccountAction("Hydrate /auth/me", () => auth.hydrate(true));
+  };
 
   // wire events store via subscription
   const eventsSnapshot = useSyncExternalStore(eventsStore.subscribe, eventsStore.get);
@@ -29,6 +130,7 @@ export default function ApiTestingPage() {
 
   // On mount: load all
   useEffect(() => {
+    if (auth.status !== 'authenticated') return;
     let cancelers = [];
     const c1 = loadTypes({ force: true });
     const c2 = loadTasks({ force: true });
@@ -36,7 +138,7 @@ export default function ApiTestingPage() {
     if (typeof c1 === 'function') cancelers.push(c1);
     if (typeof c2 === 'function') cancelers.push(c2);
     return () => cancelers.forEach(fn => { try { fn(); } catch {} });
-  }, []);
+  }, [auth.status, loadTypes, loadTasks]);
 
   // Forms
   const [typeForm, setTypeForm] = useState({ name: "", color: "#2563eb" });
@@ -139,6 +241,128 @@ export default function ApiTestingPage() {
       <DebugNav />
       <div className="p-8">
       <div className="w-full max-w-5xl mx-auto">
+        <div className="bg-white border rounded-xl shadow-md p-6 mb-6">
+          <h3 className="text-lg font-semibold mb-2">Account Testing (public)</h3>
+          <p className="text-xs text-gray-500 mb-4">
+            Exercise authentication endpoints without signing in. Adjust the shared inputs, then run any action to see the raw response below.
+          </p>
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="space-y-2 text-sm">
+              <div>Status: <span className="font-medium">{auth.status}</span></div>
+              <div>User: <span className="font-mono text-xs break-all">{auth.user ? JSON.stringify(auth.user, null, 2) : '—'}</span></div>
+              {auth.error && <div className="text-red-600">Last error: {auth.error}</div>}
+              {auth.status !== 'authenticated' && (
+                <div className="text-xs text-amber-600">
+                  Not authenticated — protected endpoints may return 401/403 until you log in.
+                </div>
+              )}
+            </div>
+            <div className="space-y-2 text-sm">
+              <label className="block text-xs font-semibold text-gray-600">Email</label>
+              <input
+                className="w-full border rounded-md px-2 py-1 text-sm"
+                value={authEmail}
+                onChange={(e) => setAuthEmail(e.target.value)}
+                placeholder="you@example.com"
+              />
+              <label className="block text-xs font-semibold text-gray-600 pt-2">Password</label>
+              <input
+                className="w-full border rounded-md px-2 py-1 text-sm"
+                type="password"
+                value={authPassword}
+                onChange={(e) => setAuthPassword(e.target.value)}
+                placeholder="Password"
+              />
+              <label className="block text-xs font-semibold text-gray-600 pt-2">Name (for signup)</label>
+              <input
+                className="w-full border rounded-md px-2 py-1 text-sm"
+                value={signupName}
+                onChange={(e) => setSignupName(e.target.value)}
+                placeholder="Jane Doe"
+              />
+              <label className="block text-xs font-semibold text-gray-600 pt-2">Verification code</label>
+              <input
+                className="w-full border rounded-md px-2 py-1 text-sm"
+                value={verifyCode}
+                onChange={(e) => setVerifyCode(e.target.value)}
+                placeholder="123456"
+              />
+              <label className="block text-xs font-semibold text-gray-600 pt-2">Password reset code</label>
+              <input
+                className="w-full border rounded-md px-2 py-1 text-sm"
+                value={resetCode}
+                onChange={(e) => setResetCode(e.target.value)}
+                placeholder="654321"
+              />
+              <label className="block text-xs font-semibold text-gray-600 pt-2">New password</label>
+              <input
+                className="w-full border rounded-md px-2 py-1 text-sm"
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="NewPassword123!"
+              />
+            </div>
+            <div className="space-y-2 text-xs">
+              <button onClick={handleFetchCsrf} className="w-full px-3 py-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700">
+                Fetch CSRF token
+              </button>
+              <button onClick={handleSignup} className="w-full px-3 py-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700">
+                Signup
+              </button>
+              <button onClick={handleVerifyEmail} className="w-full px-3 py-1.5 border rounded-md hover:bg-gray-100">
+                Verify Email
+              </button>
+              <button onClick={handleLogin} className="w-full px-3 py-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700">
+                Login
+              </button>
+              <button onClick={handleRefresh} className="w-full px-3 py-1.5 border rounded-md hover:bg-gray-100">
+                Refresh Tokens
+              </button>
+              <button onClick={handleFetchMe} className="w-full px-3 py-1.5 border rounded-md hover:bg-gray-100">
+                Call /auth/me
+              </button>
+              <button onClick={handleLogout} className="w-full px-3 py-1.5 bg-red-600 text-white rounded-md hover:bg-red-700">
+                Logout
+              </button>
+              <button onClick={handleRequestReset} className="w-full px-3 py-1.5 border rounded-md hover:bg-gray-100">
+                Request Password Reset
+              </button>
+              <button onClick={handleResetPassword} className="w-full px-3 py-1.5 border rounded-md hover:bg-gray-100">
+                Reset Password
+              </button>
+              <button onClick={handleHydrate} className="w-full px-3 py-1.5 border rounded-md hover:bg-gray-100">
+                Hydrate /auth/me
+              </button>
+            </div>
+          </div>
+          <div className="mt-6 bg-gray-50 border rounded-md p-3 max-h-64 overflow-auto">
+            <div className="text-xs font-semibold mb-2">Account Log</div>
+            {accountLog.length === 0 ? (
+              <div className="text-xs text-gray-500">No actions yet.</div>
+            ) : (
+              <ul className="space-y-2">
+                {accountLog.map((entry, idx) => (
+                  <li key={`${entry.ts}-${idx}`} className="border rounded-md p-2 bg-white">
+                    <div className="flex justify-between">
+                      <span className="font-medium">{entry.label}</span>
+                      <span className="text-gray-500">{entry.ts}</span>
+                    </div>
+                    <div className={entry.error ? "text-red-600" : "text-green-600"}>
+                      {entry.error ? `❌ ${entry.error}` : "✅ Success"}
+                    </div>
+                    {entry.payload && (
+                      <pre className="mt-1 whitespace-pre-wrap break-words text-[11px]">
+                        {JSON.stringify(entry.payload, null, 2)}
+                      </pre>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+
         {/* Manage Types */}
         <div className="bg-white border rounded-xl shadow-md p-6 mb-6">
           <h3 className="text-lg font-semibold mb-4">Manage Types</h3>

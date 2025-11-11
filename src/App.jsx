@@ -59,6 +59,12 @@ import { useScheduleStore } from './stores/scheduleStore';
 import { scheduleClient } from './lib/api/scheduleClient';
 import Profile from './pages/Profile.jsx';
 import Settings from './pages/Settings.jsx';
+import LoginPage from './auth/pages/LoginPage';
+import SignupPage from './auth/pages/SignupPage';
+import VerifyEmailPage from './auth/pages/VerifyEmailPage';
+import ResetPasswordPage from './auth/pages/ResetPasswordPage';
+import { useAuthStore } from './auth/store';
+import { useHydrateAuth } from './auth/hooks';
 
 // ========================================
 // PHASE 1 DIAGNOSTICS - Duplicate Draggable Detection
@@ -1997,9 +2003,6 @@ function useSidebarResizeController(initialWidth = 320) {
 // ========================================
 
 function App() {
-  // ========================================
-  // POLICY DEBUG (show on mount)
-  // ========================================
   React.useEffect(() => {
     console.log('🔧 POLICIES LOADED:', {
       MOVE_POLICY,
@@ -2008,17 +2011,74 @@ function App() {
       willCommitImmediately: MOVE_POLICY === 'always',
     });
   }, []);
-  
-  // ========================================
-  // SIDEBAR RESIZE CONTROLLER
-  // ========================================
-  
+
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  const authRoutes = ['/login', '/signup', '/verify-email', '/reset-password'];
+  const publicRoutes = ['/api-testing', '/'];
+  const isAuthRoute = authRoutes.includes(location.pathname);
+  const isPublicRoute = publicRoutes.some((route) => {
+    if (route === '/') {
+      return location.pathname === '/';
+    }
+    return location.pathname === route || location.pathname.startsWith(route + '/');
+  });
+
+  useHydrateAuth(!isPublicRoute);
+  const authStatus = useAuthStore((state) => state.status);
+
+  React.useEffect(() => {
+    if (authStatus === 'authenticated' && isAuthRoute) {
+      navigate('/', { replace: true });
+    }
+  }, [authStatus, isAuthRoute, navigate]);
+
+  React.useEffect(() => {
+    if (!isPublicRoute && !isAuthRoute && authStatus === 'unauthenticated') {
+      navigate('/login', { replace: true });
+    }
+  }, [authStatus, isPublicRoute, isAuthRoute, navigate]);
+
+  if (isAuthRoute) {
+    switch (location.pathname) {
+      case '/login':
+        return <LoginPage />;
+      case '/signup':
+        return <SignupPage />;
+      case '/verify-email':
+        return <VerifyEmailPage />;
+      case '/reset-password':
+        return <ResetPasswordPage />;
+      default:
+        return null;
+    }
+  }
+
+  if (!isPublicRoute && (authStatus === 'idle' || authStatus === 'loading')) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-sm text-gray-500">Loading TimeBlocks…</div>
+      </div>
+    );
+  }
+
+  if (!isPublicRoute && authStatus !== 'authenticated') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-sm text-gray-500">Redirecting to sign in…</div>
+      </div>
+    );
+  }
+
+  React.useEffect(() => {
+    if (authStatus === 'authenticated') {
+      eventsStore.initialize?.();
+    }
+  }, [authStatus]);
+
   const { onPointerDown, proxyState } = useSidebarResizeController(320);
-  
-  // ========================================
-  // DATE STORE
-  // ========================================
-  
+
   const { selectedDate, weekStartsOn, viewMode, includeWeekends } = useDateStore();
   const { setDate, setViewMode, setIncludeWeekends, nextWindow, prevWindow, goToday } = dateStore.actions;
   const { getDisplayedDays, getVisibleKeys, getDateKey } = dateStore.utils;
@@ -2029,7 +2089,6 @@ function App() {
 
   // Load schedule occurrences for visible range (declared after activeView)
   const schedStore = useScheduleStore();
-  // Subscribe to schedules to trigger rerenders when occurrences change
   const _schedRenderTick = useScheduleStore(state => state.byOccId);
   
   // When a specific slot's date changes via a menu, re-anchor to that date
@@ -2053,12 +2112,12 @@ function App() {
 
   // Load types from backend on mount
   React.useEffect(() => {
+    if (authStatus !== 'authenticated') return;
     let cancelled = false;
     const loadTypes = async () => {
       try {
         const backendTypes = await eventTypesApi.getAll();
         if (cancelled) return;
-        // Convert backend format to frontend format
         const frontendTypes = Array.isArray(backendTypes) ? backendTypes.map(t => ({
           id: t.id,
           name: t.name,
@@ -2071,14 +2130,13 @@ function App() {
       } catch (error) {
         console.error('❌ Failed to load types from backend:', error);
         if (cancelled) return;
-        // Still mark as loaded to allow UI to render with empty list
         setTypes([]);
         setTypesLoaded(true);
       }
     };
     loadTypes();
     return () => { cancelled = true; };
-  }, []);
+  }, [authStatus]);
   
   // State: Custom task templates (user-created event types)
   const [taskTemplates, setTaskTemplates] = useState([]);
@@ -2150,6 +2208,7 @@ function App() {
 
   // Ensure backend-backed events store is initialized when entering calendar
   React.useEffect(() => {
+    if (authStatus !== 'authenticated') return;
     if (activeView !== 'calendar') return;
     try {
       console.log('🪝 Initializing events store (backend)');
@@ -2157,10 +2216,11 @@ function App() {
     } catch (e) {
       console.warn('⚠️ eventsStore.initialize not available', e);
     }
-  }, [activeView]);
+  }, [activeView, authStatus]);
 
   // Load scheduled events for visible range on mount/when range changes (after activeView exists)
   React.useEffect(() => {
+    if (authStatus !== 'authenticated') return;
     let cancelled = false;
     (async () => {
       try {
@@ -2198,17 +2258,18 @@ function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, [activeView, displayedDays.map(d => d.toDateString()).join('|')]);
+  }, [activeView, authStatus, displayedDays.map(d => d.toDateString()).join('|')]);
 
   // Load schedule occurrences for visible range (new schedules API)
   React.useEffect(() => {
+    if (authStatus !== 'authenticated') return;
     if (activeView !== 'calendar' || !displayedDays || displayedDays.length === 0) return;
     const first = displayedDays[0];
     const last = displayedDays[displayedDays.length - 1];
     const fromMs = new Date(first.getFullYear(), first.getMonth(), first.getDate(), 0, 0, 0, 0).getTime();
     const toMs = new Date(last.getFullYear(), last.getMonth(), last.getDate(), 23, 59, 59, 999).getTime();
     schedStore.loadRange({ timeMin: fromMs, timeMax: toMs, laneId: undefined, force: false });
-  }, [activeView, displayedDays.map(d => d.toDateString()).join('|')]);
+  }, [activeView, authStatus, displayedDays.map(d => d.toDateString()).join('|')]);
 
   // State: Calendar popover for active day selector
   const [calendarOpen, setCalendarOpen] = useState(false);
@@ -3314,8 +3375,6 @@ function App() {
   }, [activeId, taskTemplates, scheduledItems]);
 
   // Route handling using React Router
-  const location = useLocation();
-  const navigate = useNavigate();
   const showDiagnostics = import.meta.env.VITE_SHOW_DIAGNOSTICS === 'true';
   const [settingsVersion, setSettingsVersion] = React.useState(0);
 
@@ -3351,12 +3410,43 @@ function App() {
     return activeView;
   };
 
+  if (isAuthRoute) {
+    if (location.pathname === '/login') {
+      return <LoginPage />
+    }
+    if (location.pathname === '/signup') {
+      return <SignupPage />
+    }
+    if (location.pathname === '/verify-email') {
+      return <VerifyEmailPage />
+    }
+    if (location.pathname === '/reset-password') {
+      return <ResetPasswordPage />
+    }
+  }
+
+  if (authStatus === 'idle' || authStatus === 'loading') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-sm text-gray-500">Loading TimeBlocks…</div>
+      </div>
+    );
+  }
+
+  if (authStatus !== 'authenticated') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-sm text-gray-500">Redirecting to sign in…</div>
+      </div>
+    );
+  }
+
   // If on special routes, render without DndContext wrapper
   if (location.pathname === '/backend-test') {
     return <BackendTest />;
   }
 
-  if (location.pathname === '/api-testing') {
+  if (location.pathname === '/api-testing' || location.pathname.startsWith('/api-testing/')) {
     return <ApiTestingPage />;
   }
 

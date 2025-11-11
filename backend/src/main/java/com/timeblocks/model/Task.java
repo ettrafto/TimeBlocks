@@ -1,6 +1,7 @@
 package com.timeblocks.model;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
+import com.timeblocks.jpa.LocalDateStringConverter;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 import java.time.LocalDate;
@@ -27,8 +28,9 @@ public class Task {
     @Column(name = "duration")
     private Integer duration; // minutes
 
-    @Column(name = "attached_date")
+    @Column(name = "attached_date", columnDefinition = "TEXT")
     @JsonAlias({"attached_date", "attachedDate"})
+    @Convert(converter = LocalDateStringConverter.class)
     private LocalDate attachedDate;
     
     @Column(name = "created_at")

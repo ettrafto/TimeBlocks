@@ -1,6 +1,6 @@
 spring:
   datasource:
-    url: jdbc:postgresql://<host>:5432/timeblocks
+    url: ${DATABASE_URL}
     username: ${DB_USER}
     password: ${DB_PASS}
   jpa:
@@ -16,5 +16,21 @@ spring:
     baseline-on-migrate: true
 
 server:
-  port: 8080
+  port: ${PORT:8080}
+
+auth:
+  access-secret: ${JWT_ACCESS_SECRET}
+  refresh-secret: ${JWT_REFRESH_SECRET}
+  rate-limit:
+    window-ms: ${RATE_LIMIT_WINDOW_MS:60000}
+    max: ${RATE_LIMIT_MAX:20}
+  cookie-domain: ${COOKIE_DOMAIN:}
+  cookie-secure: true
+  cookie-same-site: Lax
+  notifications:
+    log-codes: ${AUTH_LOG_CODES:false}
+
+app:
+  seed-admin:
+    enabled: ${SEED_ADMIN:false}
 

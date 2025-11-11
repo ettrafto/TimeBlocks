@@ -8,7 +8,7 @@ spring:
       ddl-auto: validate
     properties:
       hibernate:
-        dialect: com.timeblocks.sqlite.SQLiteDialect
+        dialect: com.timeblocks.sqlite.CustomSQLiteDialect
         jdbc.time_zone: UTC
         format_sql: false
         highlight_sql: false
@@ -26,6 +26,22 @@ spring:
 
 server:
   port: 8080
+
+auth:
+  access-secret: ${JWT_ACCESS_SECRET:dev-access-secret}
+  refresh-secret: ${JWT_REFRESH_SECRET:dev-refresh-secret}
+  rate-limit:
+    window-ms: ${RATE_LIMIT_WINDOW_MS:60000}
+    max: ${RATE_LIMIT_MAX:20}
+  cookie-domain: ${COOKIE_DOMAIN:}
+  cookie-secure: false
+  cookie-same-site: Lax
+  notifications:
+    log-codes: true
+
+app:
+  seed-admin:
+    enabled: true
 
 logging:
   level:

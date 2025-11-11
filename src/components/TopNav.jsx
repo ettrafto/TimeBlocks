@@ -1,5 +1,6 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useAuthStore } from '../auth/store';
 
 // Simple SVG icon components
 const HomeIcon = () => (
@@ -65,6 +66,8 @@ export default function TopNav({ activeView, onViewChange, onQuickAdd, onToggleS
   const showDiagnostics = import.meta.env.VITE_SHOW_DIAGNOSTICS === 'true';
   const [userMenuOpen, setUserMenuOpen] = React.useState(false);
   const userMenuRef = React.useRef(null);
+  const user = useAuthStore((state) => state.user);
+  const logout = useAuthStore((state) => state.logout);
 
   React.useEffect(() => {
     const onDocClick = (e) => {
@@ -77,10 +80,10 @@ export default function TopNav({ activeView, onViewChange, onQuickAdd, onToggleS
 
   const goProfile = () => { setUserMenuOpen(false); try { navigate('/profile'); } catch {} };
   const goSettings = () => { setUserMenuOpen(false); try { navigate('/settings'); } catch {} };
-  const doLogout = () => {
+  const handleLogout = async () => {
     setUserMenuOpen(false);
-    try { console.log('[TopNav] Logout clicked'); } catch {}
-    // Placeholder: wire to auth when available
+    try { await logout(); } catch {}
+    navigate('/login', { replace: true });
   };
   
   const navItems = [
@@ -95,6 +98,12 @@ export default function TopNav({ activeView, onViewChange, onQuickAdd, onToggleS
         {/* Left: Hamburger + App Name */}
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-bold text-white">TimeBlocks</h1>
+          {user && (
+            <div className="hidden sm:flex flex-col leading-tight text-xs text-gray-300">
+              <span>{user.name || user.email}</span>
+              <span className="uppercase tracking-wide text-[10px] text-gray-400">{user.role}</span>
+            </div>
+          )}
         </div>
 
         {/* Right: Navigation Icons */}
@@ -120,47 +129,62 @@ export default function TopNav({ activeView, onViewChange, onQuickAdd, onToggleS
           )}
           
           {/* Profile Dropdown */}
-          <div className="relative" ref={userMenuRef}>
-            <button
-              onClick={() => setUserMenuOpen((v) => !v)}
-              onKeyDown={(e) => { if (e.key === 'Escape') setUserMenuOpen(false); }}
-              className="flex items-center justify-center w-9 h-9 rounded-full bg-neutral-800 text-white hover:bg-neutral-700 transition-all duration-200"
-              title="User menu"
-              aria-label="User menu"
-              aria-haspopup="menu"
-              aria-expanded={userMenuOpen ? 'true' : 'false'}
-            >
-              <ProfileIcon />
-            </button>
-            {userMenuOpen && (
-              <div
-                role="menu"
-                className="absolute right-0 mt-2 w-40 rounded-md bg-white text-gray-700 shadow-lg ring-1 ring-black/5 overflow-hidden"
+          {user && (
+            <div className="relative" ref={userMenuRef}>
+              <button
+                onClick={() => setUserMenuOpen((v) => !v)}
+                onKeyDown={(e) => { if (e.key === 'Escape') setUserMenuOpen(false); }}
+                className="flex items-center justify-center w-9 h-9 rounded-full bg-neutral-800 text-white hover:bg-neutral-700 transition-all duration-200 font-semibold"
+                title="User menu"
+                aria-label="User menu"
+                aria-haspopup="menu"
+                aria-expanded={userMenuOpen ? 'true' : 'false'}
               >
-                <button
-                  role="menuitem"
-                  onClick={goProfile}
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+                {user.name?.[0]?.toUpperCase() || user.email?.[0]?.toUpperCase() || <ProfileIcon />}
+              </button>
+              {userMenuOpen && (
+                <div
+                  role="menu"
+                  className="absolute right-0 mt-2 w-48 rounded-md bg-white text-gray-700 shadow-lg ring-1 ring-black/5 overflow-hidden"
                 >
-                  Profile
-                </button>
-                <button
-                  role="menuitem"
-                  onClick={goSettings}
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
-                >
-                  Settings
-                </button>
-                <button
-                  role="menuitem"
-                  onClick={doLogout}
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
-                >
-                  Logout
-                </button>
-              </div>
-            )}
-          </div>
+                  <div className="px-3 py-2 border-b text-xs text-gray-500">
+                    <div className="font-medium text-gray-800">{user.name || user.email}</div>
+                    <div className="uppercase tracking-wide">{user.role}</div>
+                  </div>
+                  <button
+                    role="menuitem"
+                    onClick={goProfile}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+                  >
+                    Profile
+                  </button>
+                  <button
+                    role="menuitem"
+                    onClick={goSettings}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+                  >
+                    Settings
+                  </button>
+                  {user.role === 'ADMIN' && (
+                    <button
+                      role="menuitem"
+                      onClick={() => { setUserMenuOpen(false); navigate('/admin/diagnostics'); }}
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+                    >
+                      Admin tools
+                    </button>
+                  )}
+                  <button
+                    role="menuitem"
+                    onClick={handleLogout}
+                    className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50"
+                  >
+                    Logout
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </nav>

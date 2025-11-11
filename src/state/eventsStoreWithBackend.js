@@ -163,7 +163,7 @@ export function createEventsStoreWithBackend(initial = []) {
       // Keep UI stable with empty events array instead of crashing
       byId.clear();
       byDate.clear();
-      isInitialized = true;
+      isInitialized = false;
       error = error?.message || String(error);
       lastLoadedAt = Date.now();
       notify();
@@ -359,9 +359,6 @@ export function createEventsStoreWithBackend(initial = []) {
 
   const getAllEvents = () => Array.from(byId.values());
   const getStatus = () => ({ loading, error, lastLoadedAt });
-
-  // Auto-initialize on first use
-  initialize();
 
   return {
     keyOf,
