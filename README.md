@@ -30,7 +30,7 @@ An experimental time-blocking calendar built with React and @dnd-kit/core with S
    ```bash
    curl http://localhost:8080/api/health
    ```
-   Expected response: `{"ok":true,"service":"timeblocks-backend"}`
+   Expected response: `{"ok":true}`
 
 3. **Check backend logs:**
    - Request lines: `➡ GET /api/health [5ms] status=200`
@@ -80,7 +80,27 @@ An experimental time-blocking calendar built with React and @dnd-kit/core with S
    - Events should load for the current month
    - If backend is offline, calendar renders gracefully with 0 events (no crash)
 
-### 4) Troubleshooting
+### 4) Testing & Troubleshooting
+
+- **Backend unit/integration tests:**
+  ```bash
+  cd backend
+  ./gradlew test
+  ```
+
+- **Frontend unit tests (Vitest):**
+  ```bash
+  npm run test
+  ```
+
+- **Frontend e2e smoke test (Playwright):**
+  ```bash
+  npm run e2e
+  ```
+
+If any command fails, review the output, fix the underlying issue, and rerun the tests before proceeding.
+
+### 5) Troubleshooting
 
 - **net::ERR_CONNECTION_REFUSED**: Backend not running or wrong `VITE_API_BASE`
 - **Types array is empty/undefined**: Types loading is guarded; TaskBlock shows "Unknown Type" instead of crashing

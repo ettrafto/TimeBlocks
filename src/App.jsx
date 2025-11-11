@@ -2996,17 +2996,24 @@ function App() {
       // Use the ghost preview position for placement
       // ========================================
       
-      if (!ghostPosition) {
+      let effectiveGhost = ghostPosition;
+      if (!effectiveGhost) {
         console.warn('⚠️ No ghost position available, using start hour fallback');
-        ghostPosition = { startMinutes: (typeof START_HOUR_DYN === 'number' ? START_HOUR_DYN : 9) * 60, dayKey: dateKey, task: activeData.task };
+        const fallbackGhost = {
+          startMinutes: (typeof START_HOUR_DYN === 'number' ? START_HOUR_DYN : 9) * 60,
+          dayKey: dateKey,
+          task: activeData.task,
+        };
+        setGhostPosition(fallbackGhost);
+        effectiveGhost = fallbackGhost;
       }
-      
+
       const task = activeData.task;
-      const finalMinutes = ghostPosition.startMinutes;
+      const finalMinutes = effectiveGhost.startMinutes;
       const duration = task.duration || 30; // Use task duration or default to 30 min
 
       // Extract target dayKey from drop zone (if multi-day)
-      const targetDayKey = over?.data?.current?.dayKey || ghostPosition?.dayKey || dateKey;
+      const targetDayKey = over?.data?.current?.dayKey || effectiveGhost?.dayKey || dateKey;
       
       const byId = (useTypesStore && useTypesStore.getState) ? useTypesStore.getState().byId?.() : null;
       const typeColorRaw = (() => {

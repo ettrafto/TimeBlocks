@@ -37,7 +37,14 @@ curl http://localhost:8080/api/health
 
 Expected response:
 ```json
-{"ok":true,"service":"timeblocks-backend"}
+{"ok":true}
+```
+
+### Automated Tests
+
+Run the backend test suite (includes the health check MockMvc test):
+```bash
+./gradlew test
 ```
 
 ### API Endpoints
