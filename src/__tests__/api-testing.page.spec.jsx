@@ -33,6 +33,10 @@ const tasksState = {
   error: null,
 };
 
+vi.mock('../debug/components/DebugNav', () => ({
+  default: () => <div data-testid='debug-nav' />,
+}));
+
 vi.mock('../state/typesStore.js', () => {
   const useTypesStore = (selector) => {
     if (typeof selector === 'function') {
@@ -61,7 +65,7 @@ vi.mock('../state/eventsStoreWithBackend', () => {
   return {
     eventsStore: {
       subscribe: (fn) => {
-        fn(snapshot);
+        if (typeof fn === 'function') fn(snapshot);
         return () => {};
       },
       get: () => snapshot,
@@ -73,7 +77,7 @@ vi.mock('../state/eventsStoreWithBackend', () => {
   };
 });
 
-describe.skip('API Testing Page', () => {
+describe('API Testing Page', () => {
   it('renders Manage Types with empty state', () => {
     render(
       <MemoryRouter>
@@ -104,4 +108,3 @@ describe.skip('API Testing Page', () => {
     expect(screen.getByText('No Events')).toBeInTheDocument();
   });
 });
-

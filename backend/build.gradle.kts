@@ -24,6 +24,9 @@ dependencies {
     implementation("org.flywaydb:flyway-core")
     implementation("org.xerial:sqlite-jdbc:3.46.0.0")
     implementation("org.springframework.boot:spring-boot-starter-validation")
+    implementation("io.jsonwebtoken:jjwt-api:0.12.6")
+    runtimeOnly("io.jsonwebtoken:jjwt-impl:0.12.6")
+    runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.12.6")
 
     // optional: lombok (if you want getters/setters/constructors)
     compileOnly("org.projectlombok:lombok:1.18.32")
