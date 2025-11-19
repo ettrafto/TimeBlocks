@@ -7,6 +7,8 @@ export default function TaskEditorModal({ isOpen, task, types = [], onSave, onCa
   const cps = useCreatePageStore();
   const subtasks = (task?.id && cps.subtasksByTask?.[Number(task.id)]) || [];
   const [newSubtaskTitle, setNewSubtaskTitle] = React.useState('');
+  // Track subtask titles locally for controlled inputs
+  const [subtaskTitles, setSubtaskTitles] = React.useState({});
 
   React.useEffect(() => {
     // Initialize fields when the modal opens or when the editing target changes meaningfully
@@ -23,7 +25,27 @@ export default function TaskEditorModal({ isOpen, task, types = [], onSave, onCa
       setTypeId(types[0] ? String(types[0].id) : '');
     }
     setNewSubtaskTitle('');
+    setSubtaskTitles({});
   }, [isOpen, task?.id]);
+
+  // Sync subtask titles from store when subtasks change
+  React.useEffect(() => {
+    if (!task?.id) return;
+    const titles = {};
+    (subtasks || []).forEach(st => {
+      titles[st.id] = st.title || '';
+    });
+    setSubtaskTitles(prev => {
+      // Only update if the store has new data, preserve user edits
+      const updated = { ...prev };
+      (subtasks || []).forEach(st => {
+        if (st.id && !(st.id in updated)) {
+          updated[st.id] = st.title || '';
+        }
+      });
+      return updated;
+    });
+  }, [subtasks, task?.id]);
 
   if (!isOpen) return null;
 
@@ -85,11 +107,31 @@ export default function TaskEditorModal({ isOpen, task, types = [], onSave, onCa
                   <div key={st.id} className="flex items-center gap-2">
                     <input
                       type="text"
-                      defaultValue={st.title}
-                      onBlur={(e) => {
+                      value={subtaskTitles[st.id] ?? st.title ?? ''}
+                      onChange={(e) => {
+                        setSubtaskTitles(prev => ({ ...prev, [st.id]: e.target.value }));
+                      }}
+                      onBlur={async (e) => {
                         const v = e.target.value.trim();
-                        if (v && v !== st.title) {
-                          cps.updateSubtask?.(st.id, { title: v });
+                        const currentTitle = st.title || '';
+                        if (v && v !== currentTitle) {
+                          try {
+                            await cps.updateSubtask?.(st.id, { title: v });
+                            // Update local state to reflect the saved value
+                            setSubtaskTitles(prev => ({ ...prev, [st.id]: v }));
+                          } catch (error) {
+                            console.error('Failed to update subtask:', error);
+                            // Revert to original title on error
+                            setSubtaskTitles(prev => ({ ...prev, [st.id]: currentTitle }));
+                          }
+                        } else if (!v) {
+                          // If empty, revert to original
+                          setSubtaskTitles(prev => ({ ...prev, [st.id]: currentTitle }));
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.target.blur();
                         }
                       }}
                       className="flex-1 px-2 py-1 border border-gray-300 rounded text-sm"

@@ -3,6 +3,7 @@ import { useDraggable } from '@dnd-kit/core';
 import { trackScheduledItemRender } from '../../utils/diagnostics';
 import { minutesToPixels, formatTime } from '../../utils/time';
 import { useTypesStore } from '../../state/typesStore.js';
+import { useCreatePageStore } from '../../store/createPageStore.js';
 import { hexToHsl, withSaturation, withLightness, hslToString, readableTextOn, tailwindToHex } from '../Create/colorUtils.js';
 
 // ========================================
@@ -22,6 +23,62 @@ export default function ScheduledItem({
 }) {
   // PHASE 1 DIAGNOSTIC: Track this render
   trackScheduledItemRender(item.id);
+
+  // ========================================
+  // LOAD SUBTASKS FROM LINKED TASK
+  // ========================================
+  const cps = useCreatePageStore();
+  const templateTaskId = item.templateTaskId || item.taskId;
+  
+  // Debug logging
+  React.useEffect(() => {
+    console.log('🔍 ScheduledItem subtask debug:', {
+      itemId: item.id,
+      itemLabel: item.label,
+      templateTaskId,
+      taskId: item.taskId,
+      hasTemplateTaskId: !!item.templateTaskId,
+      hasTaskId: !!item.taskId,
+    });
+  }, [item.id, templateTaskId]);
+
+  const subtasks = React.useMemo(() => {
+    if (!templateTaskId || !Number.isFinite(Number(templateTaskId))) {
+      return [];
+    }
+    const taskIdNum = Number(templateTaskId);
+    const loadedSubtasks = cps.subtasksByTask?.[taskIdNum] || [];
+    console.log('📋 Subtasks for task', taskIdNum, ':', loadedSubtasks);
+    return loadedSubtasks;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templateTaskId, cps.subtasksByTask]);
+
+  // Load subtasks when component mounts or taskId changes
+  React.useEffect(() => {
+    if (!templateTaskId || !Number.isFinite(Number(templateTaskId))) {
+      console.log('⏭️ Skipping subtask load - no valid taskId:', templateTaskId);
+      return;
+    }
+    const taskIdNum = Number(templateTaskId);
+    const existingSubtasks = cps.subtasksByTask?.[taskIdNum];
+    console.log('🔄 Checking subtasks for task', taskIdNum, ':', {
+      exists: !!existingSubtasks,
+      isArray: Array.isArray(existingSubtasks),
+      length: existingSubtasks?.length || 0,
+    });
+    // Only load if not already loaded
+    if (!Array.isArray(existingSubtasks) || existingSubtasks.length === 0) {
+      console.log('📥 Loading subtasks for task', taskIdNum);
+      try {
+        cps.loadSubtasks?.(taskIdNum, { force: false });
+      } catch (error) {
+        console.warn('Failed to load subtasks for task', taskIdNum, error);
+      }
+    } else {
+      console.log('✅ Subtasks already loaded for task', taskIdNum);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templateTaskId]);
 
   // ========================================
   // DRAGGABLE SETUP - Strict gating (disabled + conditional listeners)
@@ -139,7 +196,7 @@ export default function ScheduledItem({
       ref={setCombinedRef}
       {...attributes}
       {...listenersOnState}  // StackOverflow pattern: only spread when allowDrag=true
-      className={`absolute px-3 py-2 rounded shadow-lg ${allowDrag ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'} z-10 flex flex-col justify-between overflow-visible ${isConflicting ? 'ring-2 ring-red-500/70' : ''}`}
+      className={`absolute px-3 py-2 rounded shadow-lg ${allowDrag ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'} z-10 overflow-hidden ${isConflicting ? 'ring-2 ring-red-500/70' : ''}`}
       style={style}
       data-event-id={item.id}
       data-allow-drag={allowDrag}
@@ -164,17 +221,53 @@ export default function ScheduledItem({
         </div>
       )}
       
-      <div>
-      <div className="font-semibold text-sm">{item.label}</div>
-        <div className="text-xs opacity-90">
-          {formatTime(item.startMinutes)} - {formatTime(endMinutes)}
+      <div className="flex flex-col h-full min-w-0">
+        {/* Title and time at top */}
+        <div className="shrink-0">
+          <div className="font-semibold text-sm leading-tight truncate mb-0.5">{item.label}</div>
+          <div className="text-xs opacity-90 leading-tight mb-1">
+            {formatTime(item.startMinutes)} - {formatTime(endMinutes)}
+          </div>
         </div>
+
+        {/* Subtasks displayed below title */}
+        {(subtasks || []).length > 0 && (
+          <div className="flex-shrink-0 mt-1.5">
+            <ul className="space-y-0.5">
+              {(subtasks || []).map((st, idx) => {
+                // Show more subtasks if event is tall enough (duration > 60 min)
+                const maxVisible = duration >= 90 ? 5 : duration >= 60 ? 4 : duration >= 45 ? 3 : 2;
+                if (idx >= maxVisible) return null;
+                return (
+                  <li
+                    key={st.id}
+                    className="px-1.5 py-0.5 text-[10px] leading-tight rounded border border-white/40 bg-white/25 truncate"
+                    title={st.title}
+                    style={{ pointerEvents: 'none' }} // Prevent interference with dragging
+                  >
+                    {st.title}
+                  </li>
+                );
+              })}
+              {(subtasks || []).length > (duration >= 90 ? 5 : duration >= 60 ? 4 : duration >= 45 ? 3 : 2) && (
+                <li 
+                  className="px-1.5 py-0.5 text-[10px] text-white/80 leading-tight"
+                  style={{ pointerEvents: 'none' }}
+                >
+                  +{(subtasks || []).length - (duration >= 90 ? 5 : duration >= 60 ? 4 : duration >= 45 ? 3 : 2)} more
+                </li>
+              )}
+            </ul>
+          </div>
+        )}
+
+        {/* Duration at bottom if there's space */}
+        {duration > 30 && (
+          <div className="text-xs opacity-75 mt-auto pt-1 shrink-0">
+            {duration} min
+          </div>
+        )}
       </div>
-      {duration > 30 && (
-        <div className="text-xs opacity-75 text-right">
-          {duration} min
-        </div>
-      )}
 
       {/* ========================================
           RESIZE HANDLES - Top and Bottom edges only
