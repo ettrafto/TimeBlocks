@@ -74,3 +74,23 @@ export async function resetPassword(body: { email: string; code: string; newPass
   await http('/api/auth/reset-password', { method: 'POST', body })
 }
 
+export type DevUser = {
+  id: string
+  email: string
+  name: string | null
+  role: string
+  verified: boolean
+  active: boolean
+  authenticated: boolean
+  loggedInRecently: boolean
+  verifiedAt?: string | null
+  lastLoginAt?: string | null
+  createdAt?: string | null
+  updatedAt?: string | null
+  activeSessionCount?: number
+}
+
+export async function fetchAllUsers(): Promise<DevUser[]> {
+  return http('/api/dev/users', { method: 'GET' })
+}
+

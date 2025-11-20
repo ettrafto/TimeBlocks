@@ -1,79 +1,69 @@
 @echo off
+setlocal
 echo =============================================
 echo   Reset TimeBlocks Dev Database (SQLite)
 echo =============================================
 echo.
 
-REM Navigate to backend directory relative to this script
-cd /d "%~dp0backend" || (
-    echo ERROR: Could not find the backend directory relative to this script.
-    echo        Expected: %~dp0backend
+REM Locate backend directory relative to this script
+set "BACKEND_DIR=%~dp0backend"
+if not exist "%BACKEND_DIR%" (
+    echo ERROR: Could not find backend directory. Expected path: %BACKEND_DIR%
     exit /b 1
 )
 
+pushd "%BACKEND_DIR%" >nul || (
+    echo ERROR: Unable to change directory to %BACKEND_DIR%
+    exit /b 1
+)
+
+set "GRADLEW=gradlew.bat"
 set "DB=timeblocks-dev.sqlite"
+set "ERR=0"
 
-echo Target directory: %CD%
-echo Database file   : %DB%
-echo.
-
-REM Warn if backend might be holding locks
-echo If deletion fails, ensure the backend is stopped before retrying.
+echo Backend directory: %CD%
+echo Database file    : %DB%
 echo.
 
 echo Stopping Gradle daemons...
-call gradlew.bat --stop >nul 2>&1
+call "%GRADLEW%" --stop >nul 2>&1
 
-echo Terminating any Java processes from this project (if any)...
+echo Terminating any java.exe processes launched from this backend (best-effort)...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process ^| Where-Object { $_.Name -eq 'java.exe' -and $_.CommandLine -match 'blocks-experiment\\backend' } ^| ForEach-Object { Stop-Process -Id $_.ProcessId -Force }" >nul 2>&1
-
-set "ERR=0"
-
-if exist "%DB%" (
-    echo Deleting %DB% ...
-    attrib -r "%DB%" >nul 2>&1
-    del /q /f "%DB%" >nul 2>&1
-    if exist "%DB%" (
-        echo ERROR: Could not delete %DB% ^(file may be locked^)
-        set "ERR=1"
-    )
-) else (
-    echo No main database file found: %DB%
-)
-
-for %%F in ("%DB%-shm" "%DB%-wal") do (
-    if exist "%%~F" (
-        echo Deleting %%~F ...
-        attrib -r "%%~F" >nul 2>&1
-        del /q /f "%%~F" >nul 2>&1
-        if exist "%%~F" (
-            echo WARNING: Could not delete %%~F ^(file may be locked^)
-            set "ERR=1"
-        )
-    ) else (
-        echo No WAL/SHM file found: %%~F
-    )
-)
-
-if "%ERR%"=="0" (
-    echo.
-    echo Running admin seeder to ensure default credentials are available...
-    call gradlew.bat seedAdmin >nul
-    if errorlevel 1 (
-        echo ERROR: Failed to seed the development admin account.
-        set "ERR=1"
-    ) else (
-        echo Admin credentials ready: admin@local.test / Admin123!
-    )
-)
-
 echo.
+
+echo === Step 1: Clean dev SQLite files via Gradle task ===
+REM Uses backend/build.gradle.kts::devCleanDb to remove SQLite + WAL/SHM safely.
+call "%GRADLEW%" devCleanDb
+if errorlevel 1 (
+    echo ERROR: gradlew devCleanDb failed. Make sure no backend is running and try again.
+    set "ERR=1"
+) else (
+    echo SQLite files removed via devCleanDb.
+)
+echo.
+
 if "%ERR%"=="0" (
-    echo Reset complete. The database will be recreated on next backend start.
+    echo === Step 2: Seed development admin account ===
+    REM Seeds via backend/build.gradle.kts::seedAdmin (requires Java 21 toolchain).
+    echo (username: admin@local.test  password: Admin123!)
+    call "%GRADLEW%" seedAdmin
+    if errorlevel 1 (
+        echo ERROR: gradlew seedAdmin failed. Check backend logs for details.
+        set "ERR=1"
+    ) else (
+        echo Admin account refreshed successfully.
+    )
+    echo.
+)
+
+popd >nul
+
+echo -------------------------------------------------
+if "%ERR%"=="0" (
+    echo Reset complete. Start the backend to recreate schema/data.
     exit /b 0
 ) else (
-    echo One or more files could not be deleted. Stop the backend and retry.
+    echo Reset failed. Resolve the errors above and rerun the script.
     exit /b 1
 )
-
-

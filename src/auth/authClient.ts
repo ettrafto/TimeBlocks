@@ -48,6 +48,28 @@ export interface LogoutResponse {
   status: 'logged_out';
 }
 
+export interface SignupResponse {
+  status: 'verification_required';
+}
+
+export interface VerifyEmailResponse {
+  verified: boolean;
+  alreadyVerified: boolean;
+  verifiedAt: string | null;
+}
+
+export interface RequestPasswordResetResponse {
+  status: 'reset_requested';
+}
+
+export interface ResetPasswordResponse {
+  status: 'password_updated';
+}
+
+export interface AuthClientRequestOptions {
+  debugLabel?: string;
+}
+
 /**
  * Login with email and password.
  * 
@@ -59,10 +81,11 @@ export interface LogoutResponse {
  * - Does NOT attempt refresh
  * - Throws an error with message "Invalid email or password"
  */
-export async function login(request: LoginRequest): Promise<AuthResponse> {
+export async function login(request: LoginRequest, options?: AuthClientRequestOptions): Promise<AuthResponse> {
   try {
     const response = await api.post<AuthResponse>('/api/auth/login', request, {
       skipRefresh: true, // Don't attempt refresh on login endpoint
+      debugLabel: options?.debugLabel || 'auth:login',
     });
     
     // Reset refresh failure flag on successful login
@@ -87,12 +110,14 @@ export async function login(request: LoginRequest): Promise<AuthResponse> {
  * On 200: Returns user object
  * On 401: Throws error (caller may choose to let refresh logic handle it)
  */
-export async function fetchMe(): Promise<AuthResponse> {
+export async function fetchMe(options?: AuthClientRequestOptions): Promise<AuthResponse> {
   const cid = getCorrelationId();
   logDebug('Auth][Bootstrap][Me', 'calling /api/auth/me', { cid });
   
   try {
-    const result = await api.get<AuthResponse>('/api/auth/me');
+    const result = await api.get<AuthResponse>('/api/auth/me', {
+      debugLabel: options?.debugLabel || 'auth:me',
+    });
     logInfo('Auth][Bootstrap][Me', '/api/auth/me success', {
       cid,
       userEmail: result.user?.email || null,
@@ -122,9 +147,10 @@ export async function fetchMe(): Promise<AuthResponse> {
  * - Throws error
  * - Must be treated as "refresh failed, user must be logged out"
  */
-export async function refreshAccessToken(): Promise<RefreshResponse> {
+export async function refreshAccessToken(options?: AuthClientRequestOptions): Promise<RefreshResponse> {
   return api.post<RefreshResponse>('/api/auth/refresh', undefined, {
     skipRefresh: true, // Don't attempt refresh on refresh endpoint itself
+    debugLabel: options?.debugLabel || 'auth:refresh',
   });
 }
 
@@ -137,10 +163,11 @@ export async function refreshAccessToken(): Promise<RefreshResponse> {
  * 
  * Does NOT attempt refresh on failure.
  */
-export async function logout(): Promise<LogoutResponse> {
+export async function logout(options?: AuthClientRequestOptions): Promise<LogoutResponse> {
   try {
     return await api.post<LogoutResponse>('/api/auth/logout', undefined, {
       skipRefresh: true, // Don't attempt refresh on logout
+      debugLabel: options?.debugLabel || 'auth:logout',
     });
   } catch (err) {
     // Even if logout fails, we should clear local state
@@ -153,36 +180,46 @@ export async function logout(): Promise<LogoutResponse> {
 /**
  * Signup with email, password, and optional name.
  */
-export async function signup(request: SignupRequest): Promise<void> {
-  await api.post('/api/auth/signup', request, {
+export async function signup(request: SignupRequest, options?: AuthClientRequestOptions): Promise<SignupResponse> {
+  return api.post<SignupResponse>('/api/auth/signup', request, {
     skipRefresh: true,
+    debugLabel: options?.debugLabel || 'auth:signup',
   });
 }
 
 /**
  * Verify email with code.
  */
-export async function verifyEmail(request: VerifyEmailRequest): Promise<any> {
-  return api.post('/api/auth/verify-email', request, {
+export async function verifyEmail(request: VerifyEmailRequest, options?: AuthClientRequestOptions): Promise<VerifyEmailResponse> {
+  return api.post<VerifyEmailResponse>('/api/auth/verify-email', request, {
     skipRefresh: true,
+    debugLabel: options?.debugLabel || 'auth:verify-email',
   });
 }
 
 /**
  * Request password reset.
  */
-export async function requestPasswordReset(request: RequestPasswordResetRequest): Promise<void> {
-  await api.post('/api/auth/request-password-reset', request, {
+export async function requestPasswordReset(
+  request: RequestPasswordResetRequest,
+  options?: AuthClientRequestOptions
+): Promise<RequestPasswordResetResponse> {
+  return api.post<RequestPasswordResetResponse>('/api/auth/request-password-reset', request, {
     skipRefresh: true,
+    debugLabel: options?.debugLabel || 'auth:request-password-reset',
   });
 }
 
 /**
  * Reset password with code.
  */
-export async function resetPassword(request: ResetPasswordRequest): Promise<void> {
-  await api.post('/api/auth/reset-password', request, {
+export async function resetPassword(
+  request: ResetPasswordRequest,
+  options?: AuthClientRequestOptions
+): Promise<ResetPasswordResponse> {
+  return api.post<ResetPasswordResponse>('/api/auth/reset-password', request, {
     skipRefresh: true,
+    debugLabel: options?.debugLabel || 'auth:reset-password',
   });
 }
 

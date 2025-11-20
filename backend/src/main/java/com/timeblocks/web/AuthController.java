@@ -70,6 +70,8 @@ public class AuthController {
         String cid = correlationId(servletRequest);
         String key = remoteKey(servletRequest);
         log.info("[Auth][Signup][cid={}] attempt email={} remote={}", cid, request.email(), key);
+        log.debug("[Auth][Signup][cid={}] payload nameLength={} passwordLength={}", 
+                cid, safeLength(request.name()), safeLength(request.password()));
         enforceRateLimit("signup:" + key, cid);
         try {
             authService.signup(request.email(), request.password(), request.name());
@@ -83,15 +85,22 @@ public class AuthController {
     }
 
     @PostMapping("/verify-email")
-    public ResponseEntity<?> verifyEmail(@Valid @RequestBody VerifyEmailRequest request) {
-        log.info("[Auth][VerifyEmail] attempt email={}", request.email());
-        VerificationResult result = authService.verifyEmail(request.email(), request.code());
-        log.info("[Auth][VerifyEmail] success email={} alreadyVerified={}", request.email(), result.alreadyVerified());
-        return ResponseEntity.ok(java.util.Map.of(
-                "verified", true,
-                "alreadyVerified", result.alreadyVerified(),
-                "verifiedAt", result.verifiedAt()
-        ));
+    public ResponseEntity<?> verifyEmail(@Valid @RequestBody VerifyEmailRequest request,
+                                         HttpServletRequest servletRequest) {
+        String cid = correlationId(servletRequest);
+        log.info("[Auth][VerifyEmail][cid={}] attempt email={} codeLength={}", cid, request.email(), safeLength(request.code()));
+        try {
+            VerificationResult result = authService.verifyEmail(request.email(), request.code());
+            log.info("[Auth][VerifyEmail][cid={}] success email={} alreadyVerified={}", cid, request.email(), result.alreadyVerified());
+            return ResponseEntity.ok(java.util.Map.of(
+                    "verified", true,
+                    "alreadyVerified", result.alreadyVerified(),
+                    "verifiedAt", result.verifiedAt()
+            ));
+        } catch (RuntimeException ex) {
+            log.warn("[Auth][VerifyEmail][cid={}] failure email={} reason={}", cid, request.email(), ex.getMessage());
+            throw ex;
+        }
     }
 
     @PostMapping("/login")
@@ -198,19 +207,23 @@ public class AuthController {
     @PostMapping("/logout")
     public ResponseEntity<?> logout(HttpServletRequest request, HttpServletResponse response) {
         String cid = correlationId(request);
-        findCookie(request, AuthCookieNames.REFRESH).ifPresent(cookie -> {
+        boolean refreshPresent = false;
+        Optional<Cookie> refreshCookie = findCookie(request, AuthCookieNames.REFRESH);
+        if (refreshCookie.isPresent()) {
+            refreshPresent = true;
             try {
-                Jws<Claims> parsed = jwtService.parseRefreshToken(cookie.getValue());
+                Jws<Claims> parsed = jwtService.parseRefreshToken(refreshCookie.get().getValue());
                 Optional.ofNullable(parsed.getPayload().getId())
                         .map(UUID::fromString)
                         .ifPresent(id -> authTokenRepository.findById(id)
                                 .ifPresent(token -> refreshTokenService.revoke(token, true)));
-            } catch (Exception ignored) {
+            } catch (Exception ex) {
+                log.debug("[Auth][Logout][cid={}] failed to parse refresh cookie reason={}", cid, ex.getMessage());
             }
-        });
+        }
         clearAuthCookies(response);
         SecurityContextHolder.clearContext();
-        log.info("[Auth][Logout][cid={}] user cleared session", cid);
+        log.info("[Auth][Logout][cid={}] user cleared session refreshCookiePresent={}", cid, refreshPresent);
         return ResponseEntity.ok(java.util.Map.of("status", "logged_out"));
     }
 
@@ -226,10 +239,18 @@ public class AuthController {
     }
 
     @PostMapping("/reset-password")
-    public ResponseEntity<?> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
-        log.info("[Auth][ResetPassword] email={}", request.email());
-        authService.resetPassword(request.email(), request.code(), request.newPassword());
-        return ResponseEntity.ok(java.util.Map.of("status", "password_updated"));
+    public ResponseEntity<?> resetPassword(@Valid @RequestBody ResetPasswordRequest request,
+                                           HttpServletRequest servletRequest) {
+        String cid = correlationId(servletRequest);
+        log.info("[Auth][ResetPassword][cid={}] email={} codeLength={} newPasswordLength={}", 
+                cid, request.email(), safeLength(request.code()), safeLength(request.newPassword()));
+        try {
+            authService.resetPassword(request.email(), request.code(), request.newPassword());
+            return ResponseEntity.ok(java.util.Map.of("status", "password_updated"));
+        } catch (RuntimeException ex) {
+            log.warn("[Auth][ResetPassword][cid={}] failure email={} reason={}", cid, request.email(), ex.getMessage());
+            throw ex;
+        }
     }
 
     @GetMapping("/me")
@@ -336,6 +357,10 @@ public class AuthController {
         }
         return Optional.ofNullable(request.getHeader("X-Correlation-Id"))
                 .orElse("no-cid");
+    }
+
+    private int safeLength(String value) {
+        return value == null ? 0 : value.length();
     }
 }
 

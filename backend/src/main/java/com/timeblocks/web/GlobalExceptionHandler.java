@@ -1,5 +1,7 @@
 package com.timeblocks.web;
 
+import com.timeblocks.security.CorrelationIdHolder;
+import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
@@ -20,7 +22,8 @@ public class GlobalExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<Map<String, Object>> handleValidation(MethodArgumentNotValidException ex) {
+    public ResponseEntity<Map<String, Object>> handleValidation(MethodArgumentNotValidException ex,
+                                                                HttpServletRequest request) {
         Map<String, Object> body = new HashMap<>();
         body.put("error", "validation_error");
         Map<String, String> fields = new HashMap<>();
@@ -28,14 +31,17 @@ public class GlobalExceptionHandler {
             fields.put(error.getField(), error.getDefaultMessage());
         }
         body.put("fields", fields);
+        log.warn("[API][Validation] path={} cid={} fields={}", request.getRequestURI(), CorrelationIdHolder.get(), fields);
         return ResponseEntity.badRequest().body(body);
     }
 
     @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class})
-    public ResponseEntity<Map<String, Object>> handleBadRequest(RuntimeException ex) {
+    public ResponseEntity<Map<String, Object>> handleBadRequest(RuntimeException ex,
+                                                                HttpServletRequest request) {
         Map<String, Object> body = new HashMap<>();
         body.put("error", "bad_request");
         body.put("message", ex.getMessage());
+        log.warn("[API][BadRequest] path={} cid={} message={}", request.getRequestURI(), CorrelationIdHolder.get(), ex.getMessage());
         return ResponseEntity.badRequest().body(body);
     }
 

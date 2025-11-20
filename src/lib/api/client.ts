@@ -12,6 +12,7 @@
 
 import { logInfo, logWarn, logError, logDebug } from '../logging';
 import { normalizeError, TBError, isTBError } from './normalizeError';
+import { emitHttpEvent } from './httpEvents';
 
 // Re-export for consumers
 export type { TBError };
@@ -317,20 +318,25 @@ export interface HttpOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   skipRefresh?: boolean; // Set to true for refresh endpoint itself
+  debugLabel?: string;
 }
 
 export async function apiRequest<T = any>(path: string, options: HttpOptions = {}): Promise<T> {
   const {
     method = 'GET',
     headers = {},
-    body,
+    body: bodyPayload,
     signal,
     timeoutMs = 12000,
     skipRefresh = false,
+    debugLabel,
   } = options;
 
   const url = `${BASE_URL}${path.startsWith('/') ? path : '/' + path}`;
   const cid = getCorrelationId();
+  const requestId = `${cid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const originalBody = bodyPayload;
+  const serializedBody = bodyPayload !== undefined ? JSON.stringify(bodyPayload) : undefined;
 
   // Build request headers
   const requestHeaders: Record<string, string> = {
@@ -388,12 +394,17 @@ export async function apiRequest<T = any>(path: string, options: HttpOptions = {
     }
   }
 
+  const startedAt = performance.now?.() || Date.now();
+  let finalStatus: number | null = null;
+  let finalResponseBody: any = null;
+  let finalError: TBError | null = null;
+
   const attempt = async (isRetry = false): Promise<T> => {
     try {
       const init: RequestInit = {
         method,
         headers: requestHeaders,
-        body: body !== undefined ? JSON.stringify(body) : undefined,
+        body: serializedBody,
         signal: controller.signal,
         credentials: 'include',
       };
@@ -483,31 +494,71 @@ export async function apiRequest<T = any>(path: string, options: HttpOptions = {
           cid,
           response,
         });
+        finalStatus = response.status;
+        finalResponseBody = json;
+        finalError = normalizedError;
         throw normalizedError;
       }
 
+      finalStatus = response.status;
+      finalResponseBody = json;
       return json as T;
     } catch (err) {
-      // Normalize the error
+      if (err instanceof DOMException && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
+        const abortError: TBError = {
+          status: 0,
+          code: 'abort_error',
+          message: err.message || 'Request aborted/timeout',
+          cid,
+          url,
+          method,
+          isAbort: true,
+          raw: err,
+        };
+        finalStatus = 0;
+        finalError = abortError;
+        throw abortError;
+      }
+
+      if (isTBError(err)) {
+        finalStatus = err.status ?? finalStatus;
+        finalError = err;
+        throw err;
+      }
+
       const normalizedError = normalizeError(err, {
         url,
         method,
         cid,
       });
-      
-      // Re-throw if already a TBError (from above)
-      if (isTBError(err)) {
-        throw err;
-      }
-      
-      // Throw normalized error
+      finalStatus = normalizedError.status ?? finalStatus;
+      finalError = normalizedError;
       throw normalizedError;
-    } finally {
-      clearTimeout(timeoutId);
     }
   };
 
-  return attempt();
+  try {
+    return await attempt();
+  } finally {
+    clearTimeout(timeoutId);
+    const durationMs = (performance.now?.() || Date.now()) - startedAt;
+    emitHttpEvent({
+      id: requestId,
+      label: debugLabel,
+      client: 'api',
+      method,
+      path,
+      url,
+      status: finalStatus,
+      ok: !finalError && (typeof finalStatus === 'number' ? finalStatus < 400 : true),
+      cid,
+      timestamp: Date.now(),
+      durationMs,
+      requestBody: originalBody,
+      responseBody: finalResponseBody,
+      error: finalError ?? undefined,
+    });
+  }
 }
 
 // Convenience methods

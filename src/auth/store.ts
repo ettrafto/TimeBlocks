@@ -6,18 +6,22 @@ import { getCorrelationId, checkCookiePresence } from '../lib/api/client'
 import { logInfo, logWarn, logError, logDebug, logTBError } from '../lib/logging'
 import { TBError, isTBError } from '../lib/api/normalizeError'
 
+type AuthActionOptions = {
+  debugLabel?: string
+}
+
 type AuthState = {
   user: AuthUser | null
   status: AuthStatus
   error: string | null
   pendingEmail: string | null
-  hydrate: (force?: boolean) => Promise<void>
-  login: (email: string, password: string) => Promise<void>
-  logout: () => Promise<void>
-  signup: (email: string, password: string, name?: string | null) => Promise<void>
-  verifyEmail: (email: string, code: string) => Promise<void>
-  requestPasswordReset: (email: string) => Promise<void>
-  resetPassword: (email: string, code: string, newPassword: string) => Promise<void>
+  hydrate: (force?: boolean, options?: AuthActionOptions) => Promise<void>
+  login: (email: string, password: string, options?: AuthActionOptions) => Promise<void>
+  logout: (options?: AuthActionOptions) => Promise<authClient.LogoutResponse>
+  signup: (email: string, password: string, name?: string | null, options?: AuthActionOptions) => Promise<authClient.SignupResponse>
+  verifyEmail: (email: string, code: string, options?: AuthActionOptions) => Promise<authClient.VerifyEmailResponse>
+  requestPasswordReset: (email: string, options?: AuthActionOptions) => Promise<authClient.RequestPasswordResetResponse>
+  resetPassword: (email: string, code: string, newPassword: string, options?: AuthActionOptions) => Promise<authClient.ResetPasswordResponse>
   clearError: () => void
 }
 
@@ -26,7 +30,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   status: 'idle',
   error: null,
   pendingEmail: null,
-  async hydrate(force = false) {
+  async hydrate(force = false, options?: AuthActionOptions) {
     const { status } = get()
     const cid = getCorrelationId()
     
@@ -80,7 +84,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       
       // fetchMe() will automatically handle refresh-on-401 via the HTTP client
       logDebug('Auth][Bootstrap][Hydrate', 'calling /api/auth/me', { cid })
-      const res = await authClient.fetchMe()
+      const res = await authClient.fetchMe({ debugLabel: options?.debugLabel })
       
       logInfo('Auth][Bootstrap][Hydrate', '/api/auth/me success', {
         cid,
@@ -134,7 +138,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       logInfo('Auth][Bootstrap][Hydrate', 'exiting hydrate', { cid })
     }
   },
-  async login(email, password) {
+  async login(email, password, options?: AuthActionOptions) {
     const cid = getCorrelationId()
     logInfo('Auth][Login', 'entering login', { cid, email })
     logInfo('Auth][Login', 'status -> loading', { cid })
@@ -142,7 +146,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     
     try {
       logDebug('Auth][Login', 'calling /api/auth/login', { cid })
-      const res = await authClient.login({ email, password })
+      const res = await authClient.login({ email, password }, { debugLabel: options?.debugLabel })
       logInfo('Auth][Login', '/api/auth/login success', {
         cid,
         userEmail: res.user?.email || null,
@@ -197,12 +201,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       throw err
     }
   },
-  async logout() {
+  async logout(options?: AuthActionOptions) {
     const cid = getCorrelationId()
     logInfo('Auth][Logout', 'entering logout', { cid })
     try {
-      await authClient.logout()
+      const result = await authClient.logout({ debugLabel: options?.debugLabel })
       logInfo('Auth][Logout', '/api/auth/logout success', { cid })
+      return result
     } catch (err: any) {
       const error = isTBError(err) ? err : { status: null, code: null, message: err?.message || 'unknown', cid };
       logWarn('Auth][Logout', '/api/auth/logout failed', {
@@ -210,36 +215,39 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         code: error.code,
         message: error.message,
       })
+      return { status: 'logged_out' as const }
     } finally {
       set({ user: null, status: 'unauthenticated', error: null })
       logInfo('Auth][Logout', 'status -> unauthenticated', { cid })
       logInfo('Auth][Logout', 'logout complete', { cid })
     }
   },
-  async signup(email, password, name) {
+  async signup(email, password, name, options?: AuthActionOptions) {
     set({ error: null, status: 'loading' })
     try {
-      await authClient.signup({ email, password, name })
+      const response = await authClient.signup({ email, password, name }, { debugLabel: options?.debugLabel })
       set({ pendingEmail: email.toLowerCase(), status: 'unauthenticated' })
+      return response
     } catch (err: any) {
       set({ status: 'unauthenticated', error: err?.message || 'Signup failed' })
       throw err
     }
   },
-  async verifyEmail(email, code) {
+  async verifyEmail(email, code, options?: AuthActionOptions) {
     set({ error: null })
-    await authClient.verifyEmail({ email, code })
+    const res = await authClient.verifyEmail({ email, code }, { debugLabel: options?.debugLabel })
     if (get().pendingEmail === email) {
       set({ pendingEmail: null })
     }
+    return res
   },
-  async requestPasswordReset(email) {
+  async requestPasswordReset(email, options?: AuthActionOptions) {
     set({ error: null })
-    await authClient.requestPasswordReset({ email })
+    return authClient.requestPasswordReset({ email }, { debugLabel: options?.debugLabel })
   },
-  async resetPassword(email, code, newPassword) {
+  async resetPassword(email, code, newPassword, options?: AuthActionOptions) {
     set({ error: null })
-    await authClient.resetPassword({ email, code, newPassword })
+    return authClient.resetPassword({ email, code, newPassword }, { debugLabel: options?.debugLabel })
   },
   clearError() {
     set({ error: null })

@@ -1,12 +1,18 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTypesStore, useTypesOrdered } from "../state/typesStore.js";
 import { useTasksStore } from "../state/tasksStore.js";
 import { eventsStore } from "../state/eventsStoreWithBackend.js";
 import DebugNav from "../debug/components/DebugNav";
 import log from "../lib/logger";
-import http from "../lib/api/http";
-import * as authApi from "../auth/api";
+import { api } from "../lib/api/client";
+import { subscribeHttpEvents } from "../lib/api/httpEvents";
+import * as authClient from "../auth/authClient";
 import { useAuthStore } from "../auth/store";
+import UsersMonitorPanel from "../auth-debug/UsersMonitorPanel";
+
+// ApiTestingPage is a live diagnostics harness for auth flows. It runs the same
+// store/client code paths as the real app, logs sanitized payloads + responses,
+// and surfaces correlation IDs so backend logs can be matched quickly.
 
 // Icons (outline, consistent with Create page)
 const EditIcon = () => (
@@ -19,6 +25,26 @@ const TrashIcon = () => (
     <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 7.5h15m-10.5 0V6a2.25 2.25 0 0 1 2.25-2.25h1.5A2.25 2.25 0 0 1 15.75 6v1.5M6.75 7.5l.75 10.5a2.25 2.25 0 0 0 2.25 2.25h4.5a2.25 2.25 0 0 0 2.25-2.25l.75-10.5" />
   </svg>
 );
+
+const HTTP_EVENT_TIMEOUT_MS = 8000;
+const SENSITIVE_KEYS = ['password', 'newpassword', 'code'];
+
+const sanitizePayload = (value) => {
+  if (value === null || value === undefined) return value;
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizePayload(item));
+  }
+  if (typeof value === 'object') {
+    return Object.entries(value).reduce((acc, [key, val]) => {
+      const shouldMask =
+        typeof val === 'string' &&
+        SENSITIVE_KEYS.some((needle) => key.toLowerCase().includes(needle));
+      acc[key] = shouldMask ? '***masked***' : sanitizePayload(val);
+      return acc;
+    }, {});
+  }
+  return value;
+};
 
 export default function ApiTestingPage() {
   const { items: types, loading: typesLoading, error: typesError, loadAll: loadTypes, create: createType, update: updateType, remove: removeType, counts: typeCounts } = useTypesStore();
@@ -41,84 +67,226 @@ export default function ApiTestingPage() {
   const [resetCode, setResetCode] = useState("");
   const [newPassword, setNewPassword] = useState("NewPassword123!");
   const [accountLog, setAccountLog] = useState([]);
+  const pendingHttpResolvers = useRef(new Map());
 
-  const describeError = (err) => {
+  useEffect(() => {
+    const unsubscribe = subscribeHttpEvents((event) => {
+      if (!event?.label) return;
+      const resolver = pendingHttpResolvers.current.get(event.label);
+      if (resolver) {
+        resolver(event);
+        pendingHttpResolvers.current.delete(event.label);
+      }
+    });
+    return () => {
+      pendingHttpResolvers.current.clear();
+      unsubscribe();
+    };
+  }, []);
+
+  const describeError = useCallback((err) => {
     if (!err) return null;
     if (typeof err === "string") return err;
-    if (err.status && err.message) return `${err.status} ${err.message}`;
+    if (err.status && err.message) {
+      return `${err.status} ${err.message}${err.code ? ` (${err.code})` : ""}`;
+    }
     if (err.message) return err.message;
     try {
       return JSON.stringify(err);
     } catch {
       return String(err);
     }
-  };
+  }, []);
 
-  const pushAccountLog = (label, payload, error) => {
-    setAccountLog((prev) => [
-      {
+  const addAccountLogEntry = useCallback((entry) => {
+    setAccountLog((prev) => [entry, ...prev].slice(0, 50));
+  }, []);
+
+  const updateAccountLogEntry = useCallback((id, updater) => {
+    setAccountLog((prev) =>
+      prev.map((entry) => (entry.id === id ? { ...entry, ...updater(entry) } : entry))
+    );
+  }, []);
+
+  const runAccountAction = useCallback(
+    async ({ label, client, requestPayload, executor }) => {
+      const actionId = `${label}-${Math.random().toString(36).slice(2, 8)}`;
+      const startedAt = Date.now();
+      const sanitizedRequest = sanitizePayload(requestPayload);
+      addAccountLogEntry({
+        id: actionId,
         ts: new Date().toISOString(),
         label,
-        payload: payload ?? null,
-        error: describeError(error),
-      },
-      ...prev,
-    ].slice(0, 50));
-  };
+        client,
+        status: "pending",
+        request: sanitizedRequest,
+        response: null,
+        error: null,
+        http: null,
+        cid: null,
+        durationMs: null,
+      });
 
-  const runAccountAction = async (label, action) => {
-    try {
-      const result = await action();
-      pushAccountLog(label, result ?? null, null);
-      return result;
-    } catch (err) {
-      pushAccountLog(label, null, err);
-      return null;
-    }
-  };
+      const httpEventPromise = new Promise((resolve) => {
+        pendingHttpResolvers.current.set(actionId, resolve);
+        setTimeout(() => {
+          if (pendingHttpResolvers.current.get(actionId) === resolve) {
+            pendingHttpResolvers.current.delete(actionId);
+            resolve(null);
+          }
+        }, HTTP_EVENT_TIMEOUT_MS);
+      });
+
+      console.groupCollapsed(`[ApiTesting][${actionId}] ${label}`);
+      console.info("[ApiTesting] request", { client, payload: sanitizedRequest });
+
+      try {
+        const result = await executor(actionId);
+        const httpEvent = await httpEventPromise;
+        const durationMs = Date.now() - startedAt;
+        updateAccountLogEntry(actionId, () => ({
+          status: "success",
+          response: sanitizePayload(httpEvent?.responseBody ?? result ?? null),
+          error: null,
+          http: httpEvent
+            ? {
+                method: httpEvent.method,
+                path: httpEvent.path,
+                status: httpEvent.status,
+                durationMs: httpEvent.durationMs ?? durationMs,
+              }
+            : null,
+          cid: httpEvent?.cid ?? null,
+          durationMs,
+        }));
+        console.info("[ApiTesting] response", {
+          status: httpEvent?.status ?? "n/a",
+          body: httpEvent?.responseBody ?? result ?? null,
+          cid: httpEvent?.cid ?? "n/a",
+        });
+        console.groupEnd();
+        return result;
+      } catch (err) {
+        const httpEvent = await httpEventPromise;
+        const durationMs = Date.now() - startedAt;
+        const errorText = describeError(err);
+        updateAccountLogEntry(actionId, () => ({
+          status: "error",
+          error: errorText,
+          response: sanitizePayload(httpEvent?.responseBody ?? null),
+          http: httpEvent
+            ? {
+                method: httpEvent.method,
+                path: httpEvent.path,
+                status: httpEvent.status,
+                durationMs: httpEvent.durationMs ?? durationMs,
+              }
+            : null,
+          cid: httpEvent?.cid ?? null,
+          durationMs,
+        }));
+        console.error("[ApiTesting] error", errorText, {
+          status: httpEvent?.status ?? "n/a",
+          cid: httpEvent?.cid ?? "n/a",
+        });
+        console.groupEnd();
+        return null;
+      }
+    },
+    [addAccountLogEntry, describeError, updateAccountLogEntry]
+  );
 
   const handleFetchCsrf = async () => {
-    await runAccountAction("Fetch CSRF", () => http("/api/auth/csrf", { method: "GET" }));
+    await runAccountAction({
+      label: "Fetch CSRF",
+      client: "api.get",
+      requestPayload: null,
+      executor: (actionId) => api.get("/api/auth/csrf", { debugLabel: actionId }),
+    });
   };
 
   const handleSignup = async () => {
-    await runAccountAction("Signup", () => authSignup(authEmail, authPassword, signupName));
+    await runAccountAction({
+      label: "Signup",
+      client: "authStore.signup",
+      requestPayload: { email: authEmail, password: authPassword, name: signupName },
+      executor: (actionId) =>
+        authSignup(authEmail, authPassword, signupName, { debugLabel: actionId }),
+    });
   };
 
   const handleVerifyEmail = async () => {
-    await runAccountAction("Verify Email", () => authVerifyEmail(authEmail, verifyCode));
+    await runAccountAction({
+      label: "Verify Email",
+      client: "authStore.verifyEmail",
+      requestPayload: { email: authEmail, code: verifyCode },
+      executor: (actionId) => authVerifyEmail(authEmail, verifyCode, { debugLabel: actionId }),
+    });
   };
 
   const handleLogin = async () => {
-    await runAccountAction("Login", () => authLogin(authEmail, authPassword));
+    await runAccountAction({
+      label: "Login",
+      client: "authStore.login",
+      requestPayload: { email: authEmail, password: authPassword },
+      executor: (actionId) => authLogin(authEmail, authPassword, { debugLabel: actionId }),
+    });
   };
 
   const handleRefresh = async () => {
-    await runAccountAction("Refresh Tokens", async () => {
-      await authApi.refresh();
-      return { ok: true };
+    await runAccountAction({
+      label: "Refresh Tokens",
+      client: "authClient.refreshAccessToken",
+      requestPayload: null,
+      executor: (actionId) => authClient.refreshAccessToken({ debugLabel: actionId }),
     });
     await authHydrate(true);
   };
 
   const handleFetchMe = async () => {
-    await runAccountAction("/api/auth/me", () => authApi.me());
+    await runAccountAction({
+      label: "/api/auth/me",
+      client: "authClient.fetchMe",
+      requestPayload: null,
+      executor: (actionId) => authClient.fetchMe({ debugLabel: actionId }),
+    });
   };
 
   const handleLogout = async () => {
-    await runAccountAction("Logout", () => authLogout());
+    await runAccountAction({
+      label: "Logout",
+      client: "authStore.logout",
+      requestPayload: null,
+      executor: (actionId) => authLogout({ debugLabel: actionId }),
+    });
   };
 
   const handleRequestReset = async () => {
-    await runAccountAction("Request Password Reset", () => authRequestPasswordReset(authEmail));
+    await runAccountAction({
+      label: "Request Password Reset",
+      client: "authStore.requestPasswordReset",
+      requestPayload: { email: authEmail },
+      executor: (actionId) => authRequestPasswordReset(authEmail, { debugLabel: actionId }),
+    });
   };
 
   const handleResetPassword = async () => {
-    await runAccountAction("Reset Password", () => authResetPassword(authEmail, resetCode, newPassword));
+    await runAccountAction({
+      label: "Reset Password",
+      client: "authStore.resetPassword",
+      requestPayload: { email: authEmail, code: resetCode, newPassword },
+      executor: (actionId) =>
+        authResetPassword(authEmail, resetCode, newPassword, { debugLabel: actionId }),
+    });
   };
 
   const handleHydrate = async () => {
-    await runAccountAction("Hydrate /auth/me", () => authHydrate(true));
+    await runAccountAction({
+      label: "Hydrate /auth/me",
+      client: "authStore.hydrate",
+      requestPayload: null,
+      executor: (actionId) => authHydrate(true, { debugLabel: actionId }),
+    });
   };
 
   // wire events store via subscription
@@ -350,17 +518,45 @@ export default function ApiTestingPage() {
             ) : (
               <ul className="space-y-2">
                 {accountLog.map((entry, idx) => (
-                  <li key={`${entry.ts}-${idx}`} className="border rounded-md p-2 bg-white">
+                  <li key={`${entry.id}-${idx}`} className="border rounded-md p-2 bg-white">
                     <div className="flex justify-between">
                       <span className="font-medium">{entry.label}</span>
                       <span className="text-gray-500">{entry.ts}</span>
                     </div>
-                    <div className={entry.error ? "text-red-600" : "text-green-600"}>
-                      {entry.error ? `❌ ${entry.error}` : "✅ Success"}
+                    <div
+                      className={
+                        entry.status === "error"
+                          ? "text-red-600"
+                          : entry.status === "success"
+                          ? "text-green-600"
+                          : "text-amber-600"
+                      }
+                    >
+                      {entry.status === "error"
+                        ? `❌ ${entry.error || "Failed"}`
+                        : entry.status === "success"
+                        ? "✅ Success"
+                        : "⏳ Pending"}
                     </div>
-                    {entry.payload && (
-                      <pre className="mt-1 whitespace-pre-wrap break-words text-[11px]">
-                        {JSON.stringify(entry.payload, null, 2)}
+                    <div className="text-[11px] text-gray-500 mt-1 flex flex-col gap-0.5">
+                      <span>client: {entry.client}</span>
+                      <span>
+                        status: {entry.http?.status ?? "—"} • method: {entry.http?.method ?? "—"}{' '}
+                        {entry.http?.path ?? ""}
+                      </span>
+                      <span>
+                        cid: {entry.cid ?? "—"} • duration:{" "}
+                        {entry.http?.durationMs ? `${Math.round(entry.http.durationMs)}ms` : "—"}
+                      </span>
+                    </div>
+                    {entry.request && (
+                      <pre className="mt-2 whitespace-pre-wrap break-words text-[11px] bg-gray-50 border rounded p-2">
+                        {`Request:\n${JSON.stringify(entry.request, null, 2)}`}
+                      </pre>
+                    )}
+                    {entry.response && (
+                      <pre className="mt-2 whitespace-pre-wrap break-words text-[11px] bg-gray-50 border rounded p-2">
+                        {`Response:\n${JSON.stringify(entry.response, null, 2)}`}
                       </pre>
                     )}
                   </li>
@@ -370,6 +566,7 @@ export default function ApiTestingPage() {
           </div>
         </div>
 
+        <UsersMonitorPanel />
         {/* Manage Types */}
         <div className="bg-white border rounded-xl shadow-md p-6 mb-6">
           <h3 className="text-lg font-semibold mb-4">Manage Types</h3>

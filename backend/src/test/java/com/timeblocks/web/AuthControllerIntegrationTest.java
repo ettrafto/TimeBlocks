@@ -340,6 +340,84 @@ class AuthControllerIntegrationTest {
         
         // Note: Log verification would show reason=jwt_malformed
     }
+
+    @Test
+    void signup_returnsVerificationRequiredPayload() throws Exception {
+        String email = "apitest-" + System.currentTimeMillis() + "@local.test";
+        SignupRequest signup = new SignupRequest(email, "Password123!", "API Tester");
+        mockMvc.perform(post("/api/auth/signup")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(signup)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("verification_required"));
+    }
+
+    @Test
+    void verifyEmail_returnsVerificationSnapshot() throws Exception {
+        String email = "verify-" + System.currentTimeMillis() + "@local.test";
+        SignupRequest signup = new SignupRequest(email, "Password123!", "Verifier");
+        mockMvc.perform(post("/api/auth/signup")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(signup)))
+                .andExpect(status().isCreated());
+
+        EmailVerification verification = emailVerificationRepository.findAll().stream()
+                .findFirst()
+                .orElseThrow();
+        verification.setCode(HashUtils.sha256("333333"));
+        emailVerificationRepository.save(verification);
+
+        VerifyEmailRequest request = new VerifyEmailRequest(email, "333333");
+        mockMvc.perform(post("/api/auth/verify-email")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.verified").value(true))
+                .andExpect(jsonPath("$.alreadyVerified").value(false))
+                .andExpect(jsonPath("$.verifiedAt").exists());
+    }
+
+    @Test
+    void logout_withoutCookiesStillReturnsLoggedOutStatus() throws Exception {
+        mockMvc.perform(post("/api/auth/logout")
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("logged_out"));
+    }
+
+    @Test
+    void resetPassword_returnsUpdatedStatus() throws Exception {
+        String email = "reset-" + System.currentTimeMillis() + "@local.test";
+        SignupRequest signup = new SignupRequest(email, "Password123!", "Reset Tester");
+        mockMvc.perform(post("/api/auth/signup")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(signup)))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/api/auth/request-password-reset")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new RequestPasswordResetRequest(email))))
+                .andExpect(status().isOk());
+
+        PasswordReset reset = passwordResetRepository.findAll().stream()
+                .findFirst()
+                .orElseThrow();
+        reset.setCode(HashUtils.sha256("444444"));
+        passwordResetRepository.save(reset);
+
+        ResetPasswordRequest resetPasswordRequest = new ResetPasswordRequest(email, "444444", "NewPassword123!");
+        mockMvc.perform(post("/api/auth/reset-password")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(resetPasswordRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("password_updated"));
+    }
     
     @Test
     void refreshTokenService_logsRotation() throws Exception {
