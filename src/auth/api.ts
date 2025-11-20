@@ -13,12 +13,20 @@ function hasCsrfCookie(): boolean {
 }
 
 async function ensureCsrf(): Promise<void> {
-  if (hasCsrfCookie()) return
+  if (hasCsrfCookie()) {
+    return
+  }
   if (!csrfPromise) {
-    csrfPromise = http('/api/auth/csrf', { method: 'GET' }).catch((err) => {
-      csrfPromise = null
-      throw err
-    })
+    csrfPromise = http('/api/auth/csrf', { method: 'GET' })
+      .then((result) => {
+        console.debug('[Auth][CSRF] token fetched and cookie set')
+        return result
+      })
+      .catch((err) => {
+        csrfPromise = null
+        console.error('[Auth][CSRF] failed to fetch token', err)
+        throw err
+      })
   }
   try {
     await csrfPromise

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useTypesStore, useTypesOrdered } from "../state/typesStore.js";
 import { useTasksStore } from "../state/tasksStore.js";
 import { eventsStore } from "../state/eventsStoreWithBackend.js";
@@ -24,18 +24,16 @@ export default function ApiTestingPage() {
   const { items: types, loading: typesLoading, error: typesError, loadAll: loadTypes, create: createType, update: updateType, remove: removeType, counts: typeCounts } = useTypesStore();
   const orderedTypes = useTypesOrdered();
   const { loadAll: loadTasks, loadSubtasks, tasks, tasksForType, byTypeId, subtasksForTask, createTask, updateTask, removeTask, addSubtask, updateSubtask, removeSubtask, loading: tasksLoading, error: tasksError } = useTasksStore();
-  const auth = useAuthStore((state) => ({
-    user: state.user,
-    status: state.status,
-    error: state.error,
-    login: state.login,
-    logout: state.logout,
-    hydrate: state.hydrate,
-    signup: state.signup,
-    verifyEmail: state.verifyEmail,
-    requestPasswordReset: state.requestPasswordReset,
-    resetPassword: state.resetPassword,
-  }));
+  const authUser = useAuthStore((state) => state.user);
+  const authStatus = useAuthStore((state) => state.status);
+  const authError = useAuthStore((state) => state.error);
+  const authLogin = useAuthStore((state) => state.login);
+  const authLogout = useAuthStore((state) => state.logout);
+  const authHydrate = useAuthStore((state) => state.hydrate);
+  const authSignup = useAuthStore((state) => state.signup);
+  const authVerifyEmail = useAuthStore((state) => state.verifyEmail);
+  const authRequestPasswordReset = useAuthStore((state) => state.requestPasswordReset);
+  const authResetPassword = useAuthStore((state) => state.resetPassword);
   const [authEmail, setAuthEmail] = useState("user@test.local");
   const [authPassword, setAuthPassword] = useState("Password123!");
   const [signupName, setSignupName] = useState("Test User");
@@ -84,15 +82,15 @@ export default function ApiTestingPage() {
   };
 
   const handleSignup = async () => {
-    await runAccountAction("Signup", () => auth.signup(authEmail, authPassword, signupName));
+    await runAccountAction("Signup", () => authSignup(authEmail, authPassword, signupName));
   };
 
   const handleVerifyEmail = async () => {
-    await runAccountAction("Verify Email", () => auth.verifyEmail(authEmail, verifyCode));
+    await runAccountAction("Verify Email", () => authVerifyEmail(authEmail, verifyCode));
   };
 
   const handleLogin = async () => {
-    await runAccountAction("Login", () => auth.login(authEmail, authPassword));
+    await runAccountAction("Login", () => authLogin(authEmail, authPassword));
   };
 
   const handleRefresh = async () => {
@@ -100,7 +98,7 @@ export default function ApiTestingPage() {
       await authApi.refresh();
       return { ok: true };
     });
-    await auth.hydrate(true);
+    await authHydrate(true);
   };
 
   const handleFetchMe = async () => {
@@ -108,29 +106,38 @@ export default function ApiTestingPage() {
   };
 
   const handleLogout = async () => {
-    await runAccountAction("Logout", () => auth.logout());
+    await runAccountAction("Logout", () => authLogout());
   };
 
   const handleRequestReset = async () => {
-    await runAccountAction("Request Password Reset", () => auth.requestPasswordReset(authEmail));
+    await runAccountAction("Request Password Reset", () => authRequestPasswordReset(authEmail));
   };
 
   const handleResetPassword = async () => {
-    await runAccountAction("Reset Password", () => auth.resetPassword(authEmail, resetCode, newPassword));
+    await runAccountAction("Reset Password", () => authResetPassword(authEmail, resetCode, newPassword));
   };
 
   const handleHydrate = async () => {
-    await runAccountAction("Hydrate /auth/me", () => auth.hydrate(true));
+    await runAccountAction("Hydrate /auth/me", () => authHydrate(true));
   };
 
   // wire events store via subscription
-  const eventsSnapshot = useSyncExternalStore(eventsStore.subscribe, eventsStore.get);
+  // Use useState + useEffect instead of useSyncExternalStore to avoid infinite loop
+  const [eventsSnapshot, setEventsSnapshot] = useState(() => eventsStore.get());
+  
+  useEffect(() => {
+    const unsubscribe = eventsStore.subscribe((newState) => {
+      setEventsSnapshot(newState);
+    });
+    return unsubscribe;
+  }, []);
+  
   const eventsStatus = eventsStore.getStatus ? eventsStore.getStatus() : { loading: false, error: null };
   const allEvents = useMemo(() => Array.from(eventsSnapshot.byId?.values?.() || []), [eventsSnapshot]);
 
   // On mount: load all
   useEffect(() => {
-    if (auth.status !== 'authenticated') return;
+    if (authStatus !== 'authenticated') return;
     let cancelers = [];
     const c1 = loadTypes({ force: true });
     const c2 = loadTasks({ force: true });
@@ -138,7 +145,7 @@ export default function ApiTestingPage() {
     if (typeof c1 === 'function') cancelers.push(c1);
     if (typeof c2 === 'function') cancelers.push(c2);
     return () => cancelers.forEach(fn => { try { fn(); } catch {} });
-  }, [auth.status, loadTypes, loadTasks]);
+  }, [authStatus, loadTypes, loadTasks]);
 
   // Forms
   const [typeForm, setTypeForm] = useState({ name: "", color: "#2563eb" });
@@ -248,10 +255,10 @@ export default function ApiTestingPage() {
           </p>
           <div className="grid gap-4 md:grid-cols-3">
             <div className="space-y-2 text-sm">
-              <div>Status: <span className="font-medium">{auth.status}</span></div>
-              <div>User: <span className="font-mono text-xs break-all">{auth.user ? JSON.stringify(auth.user, null, 2) : '—'}</span></div>
-              {auth.error && <div className="text-red-600">Last error: {auth.error}</div>}
-              {auth.status !== 'authenticated' && (
+              <div>Status: <span className="font-medium">{authStatus}</span></div>
+              <div>User: <span className="font-mono text-xs break-all">{authUser ? JSON.stringify(authUser, null, 2) : '—'}</span></div>
+              {authError && <div className="text-red-600">Last error: {authError}</div>}
+              {authStatus !== 'authenticated' && (
                 <div className="text-xs text-amber-600">
                   Not authenticated — protected endpoints may return 401/403 until you log in.
                 </div>

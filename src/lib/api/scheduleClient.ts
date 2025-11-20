@@ -1,4 +1,8 @@
-import { apiRequest } from '../../services/api';
+// Import from unified HTTP client (client.ts)
+// This ensures schedule endpoints benefit from refresh-on-401, CSRF, correlation IDs, etc.
+// All schedule API calls go through the same unified pipeline as auth and other data endpoints.
+import { apiRequest, getCorrelationId, ensureCsrfForMutations } from './client';
+import { logInfo, logError } from '../logging';
 
 export type ScheduleDTO = {
   id?: string;
@@ -30,15 +34,26 @@ export type Occurrence = {
 
 export const scheduleClient = {
   async listOccurrences(params: { timeMin: string; timeMax: string; laneId?: string; includeCache?: number }) {
-    const qp = new URLSearchParams();
-    qp.set('timeMin', params.timeMin);
-    qp.set('timeMax', params.timeMax);
-    if (params.laneId) qp.set('laneId', params.laneId);
-    if (params.includeCache != null) qp.set('includeCache', String(params.includeCache));
-    return apiRequest(`/api/schedules?${qp.toString()}`, { method: 'GET' }) as Promise<Occurrence[]>;
+    const cid = getCorrelationId();
+    logInfo('API][Schedules', 'listOccurrences start', { cid, timeMin: params.timeMin, timeMax: params.timeMax, laneId: params.laneId });
+    try {
+      const qp = new URLSearchParams();
+      qp.set('timeMin', params.timeMin);
+      qp.set('timeMax', params.timeMax);
+      if (params.laneId) qp.set('laneId', params.laneId);
+      if (params.includeCache != null) qp.set('includeCache', String(params.includeCache));
+      const result = await apiRequest(`/api/schedules?${qp.toString()}`, { method: 'GET' }) as Promise<Occurrence[]>;
+      logInfo('API][Schedules', 'listOccurrences success', { cid, count: Array.isArray(result) ? result.length : 0 });
+      return result;
+    } catch (error: any) {
+      logError('API][Schedules', 'listOccurrences failed', { cid, status: error?.status, code: error?.code });
+      throw error;
+    }
   },
 
   async createSchedule(dto: ScheduleDTO) {
+    // CSRF is automatically handled by apiRequest, but we ensure it's available for clarity
+    await ensureCsrfForMutations();
     return apiRequest('/api/schedules', { method: 'POST', body: {
       id: dto.id,
       taskId: dto.taskId,
@@ -54,6 +69,8 @@ export const scheduleClient = {
   },
 
   async updateSchedule(id: string, patch: Partial<ScheduleDTO>) {
+    // CSRF is automatically handled by apiRequest, but we ensure it's available for clarity
+    await ensureCsrfForMutations();
     const body: any = {};
     if (patch.taskId != null) body.taskId = patch.taskId;
     if (patch.start != null) body.start = patch.start;
@@ -68,10 +85,14 @@ export const scheduleClient = {
   },
 
   async deleteSchedule(id: string) {
+    // CSRF is automatically handled by apiRequest, but we ensure it's available for clarity
+    await ensureCsrfForMutations();
     return apiRequest(`/api/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' });
   },
 
   async createException(scheduleId: string, dto: { exDate: number; changeStart?: number; changeEnd?: number; changeLaneId?: string; changeStatus?: string; meta?: string }) {
+    // CSRF is automatically handled by apiRequest, but we ensure it's available for clarity
+    await ensureCsrfForMutations();
     const body: any = { exDateUtc: dto.exDate };
     if (dto.changeStart != null) body.changeStartTsUtc = dto.changeStart;
     if (dto.changeEnd != null) body.changeEndTsUtc = dto.changeEnd;
@@ -82,6 +103,8 @@ export const scheduleClient = {
   },
 
   async deleteException(exceptionId: string) {
+    // CSRF is automatically handled by apiRequest, but we ensure it's available for clarity
+    await ensureCsrfForMutations();
     return apiRequest(`/api/schedule-exceptions/${encodeURIComponent(exceptionId)}`, { method: 'DELETE' });
   },
 };

@@ -20,6 +20,7 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.List;
+import java.util.Objects;
 
 @Configuration
 @EnableWebSecurity
@@ -49,6 +50,7 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
+                .addFilterBefore(new CorrelationIdFilter(), org.springframework.web.filter.CorsFilter.class)
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .csrf(csrf -> csrf
                         .csrfTokenRepository(csrfTokenRepository())
@@ -56,9 +58,12 @@ public class SecurityConfig {
                 )
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        // Public endpoints
                         .requestMatchers("/api/auth/csrf").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/auth/csrf").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/auth/refresh").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/auth/logout").permitAll()
                         .requestMatchers("/api/auth/signup").permitAll()
                         .requestMatchers("/api/auth/verify-email").permitAll()
                         .requestMatchers("/api/auth/request-password-reset").permitAll()
@@ -66,7 +71,9 @@ public class SecurityConfig {
                         .requestMatchers("/api/health").permitAll()
                         .requestMatchers("/error").permitAll()
                         .requestMatchers(HttpMethod.GET, "/").permitAll()
-                        .anyRequest().authenticated()
+                        // Protected endpoints
+                        .requestMatchers("/api/auth/me").authenticated()  // Requires valid ACCESS token
+                        .anyRequest().authenticated()  // All other /api/** require authentication
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterAfter(new CsrfCookieFilter(), CsrfFilter.class)
@@ -86,9 +93,10 @@ public class SecurityConfig {
     @Bean
     public CookieCsrfTokenRepository csrfTokenRepository() {
         CookieCsrfTokenRepository repository = CookieCsrfTokenRepository.withHttpOnlyFalse();
+        String sameSite = Objects.requireNonNullElse(authProperties.getCookieSameSite(), "Lax");
         repository.setCookieCustomizer(builder -> builder
                 .path("/")
-                .sameSite("None")
+                .sameSite(sameSite)
                 .secure(authProperties.isCookieSecure())
         );
         return repository;

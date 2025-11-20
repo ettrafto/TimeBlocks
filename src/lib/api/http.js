@@ -36,14 +36,28 @@ export async function http(path, opts = {}) {
   }
 
   const cid = rest.cid || `fe-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`;
+  
+  console.debug('[HTTP] request', {
+    path,
+    method,
+    credentials: 'include',
+    from: 'http.js',
+    cid,
+  });
+  
   const attempt = async () => {
+    // Attach CSRF token for state-changing requests (POST, PUT, PATCH, DELETE)
+    // Note: /api/auth/** endpoints are exempted from CSRF on backend, but we still send it for consistency
     if (method !== 'GET' && typeof document !== 'undefined' && !headers['X-XSRF-TOKEN']) {
       const csrfToken = getCookie('XSRF-TOKEN');
       if (csrfToken) {
         headers['X-XSRF-TOKEN'] = csrfToken;
-        console.debug('[HTTP] attaching CSRF token', { path, method, csrfToken });
+        console.debug('[HTTP] attaching CSRF token', { path, method });
       } else {
-        console.warn('[HTTP] missing CSRF token cookie before request', { path, method });
+        // Only warn for non-auth endpoints (auth endpoints are CSRF-exempted)
+        if (!path.startsWith('/api/auth/')) {
+          log.warn(['HTTP', method, path], 'missing CSRF token cookie');
+        }
       }
     }
 
@@ -61,14 +75,25 @@ export async function http(path, opts = {}) {
       const json = safeJson(text);
       const dt = (performance.now?.() || Date.now()) - t0;
       log.info(['API', method, path], `loaded: ${res.status} in ${Math.round(dt)}ms`);
+      console.debug('[HTTP] response', {
+        path,
+        method,
+        status: res.status,
+        from: 'http.js',
+        cid,
+      });
       if (!res.ok) {
-        if (res.status === 401 && !_retry) {
+        // Only attempt refresh for 401 on authenticated endpoints (not on /api/auth/refresh itself)
+        if (res.status === 401 && !_retry && !path.includes('/api/auth/refresh') && !path.includes('/api/auth/login')) {
           try {
+            console.debug('[HTTP] 401 received, attempting token refresh', { path, method });
             await triggerRefresh();
+            console.debug('[HTTP] token refresh succeeded, retrying request', { path, method });
+            return http(path, { ...rest, _retry: true });
           } catch (refreshErr) {
+            log.warn(['HTTP', method, path], 'token refresh failed', refreshErr);
             throw buildError(res.status, json, cid);
           }
-          return http(path, { ...rest, _retry: true });
         }
         throw buildError(res.status, json, cid);
       }

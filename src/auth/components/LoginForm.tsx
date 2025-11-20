@@ -1,29 +1,45 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../../auth/store'
+import { isTBError } from '../../lib/api/normalizeError'
 
 type Props = {
   onSuccess?: () => void
 }
 
 const LoginForm: React.FC<Props> = ({ onSuccess }) => {
+  const navigate = useNavigate()
   const login = useAuthStore((state) => state.login)
+  const error = useAuthStore((state) => state.error)
   const clearError = useAuthStore((state) => state.clearError)
+  const authStatus = useAuthStore((state) => state.status)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [error, setError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  // Navigate to home on successful login
+  useEffect(() => {
+    if (authStatus === 'authenticated') {
+      onSuccess?.()
+      navigate('/', { replace: true })
+    }
+  }, [authStatus, navigate, onSuccess])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (isSubmitting) return
-    setError(null)
     clearError()
     setIsSubmitting(true)
     try {
       await login(email, password)
-      onSuccess?.()
+      // Navigation handled by useEffect above
     } catch (err: any) {
-      setError(err?.message || 'Unable to login')
+      // Error is set in store by login()
+      // Error is already a TBError from the auth store
+      if (isTBError(err)) {
+        // Can extract status/code for UX if needed
+        // For now, just use the message which is already set in store
+      }
     } finally {
       setIsSubmitting(false)
     }

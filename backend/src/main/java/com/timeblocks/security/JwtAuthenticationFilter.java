@@ -3,7 +3,11 @@ package com.timeblocks.security;
 import com.timeblocks.model.User;
 import com.timeblocks.repo.UserRepository;
 import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.ExpiredJwtException;
 import io.jsonwebtoken.Jws;
+import io.jsonwebtoken.JwtException;
+import io.jsonwebtoken.MalformedJwtException;
+import io.jsonwebtoken.security.SignatureException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.Cookie;
@@ -44,26 +48,50 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             @NonNull FilterChain filterChain)
             throws ServletException, IOException {
 
+        String path = request.getRequestURI();
+        String method = request.getMethod();
+        String cid = CorrelationIdHolder.get();
+        
+        // Check for auth cookies
+        boolean hasAccessCookie = WebUtils.getCookie(request, AuthCookieNames.ACCESS) != null;
+        boolean hasRefreshCookie = WebUtils.getCookie(request, AuthCookieNames.REFRESH) != null;
+        
+        log.debug("[JWT][Filter] path={} method={} hasAccessCookie={} hasRefreshCookie={} cid={}", 
+            path, method, hasAccessCookie, hasRefreshCookie, cid);
+
         if (SecurityContextHolder.getContext().getAuthentication() == null) {
             Cookie cookie = WebUtils.getCookie(request, AuthCookieNames.ACCESS);
             if (cookie != null) {
-                authenticateWithToken(cookie.getValue(), request);
+                log.debug("[JWT][Filter] ACCESS cookie found path={} method={} cid={}", path, method, cid);
+                authenticateWithToken(cookie.getValue(), request, path, method, cid);
+            } else {
+                log.debug("[JWT][Filter] no ACCESS cookie path={} method={} reason=jwt_missing cid={}", 
+                    path, method, cid);
             }
+        } else {
+            log.debug("[JWT][Filter] already authenticated path={} method={} cid={}", path, method, cid);
         }
 
         filterChain.doFilter(request, response);
     }
 
-    private void authenticateWithToken(String token, HttpServletRequest request) {
+    private void authenticateWithToken(String token, HttpServletRequest request, String path, String method, String cid) {
+        String reason = null;
         try {
             Jws<Claims> parsed = jwtService.parseAccessToken(token);
             String subject = parsed.getPayload().getSubject();
             if (subject == null) {
+                reason = "jwt_malformed";
+                log.warn("[JWT][Filter] token missing subject path={} method={} reason={} cid={}", 
+                    path, method, reason, cid);
                 return;
             }
             UUID userId = UUID.fromString(subject);
             Optional<User> userOptional = userRepository.findById(Objects.requireNonNull(userId));
             if (userOptional.isEmpty()) {
+                reason = "jwt_user_not_found";
+                log.warn("[JWT][Filter] user not found userId={} path={} method={} reason={} cid={}", 
+                    userId, path, method, reason, cid);
                 return;
             }
             User user = userOptional.get();
@@ -72,8 +100,24 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
             authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
             SecurityContextHolder.getContext().setAuthentication(authentication);
+            log.info("[JWT][Filter] authenticated userId={} email={} path={} method={} reason=valid cid={}", 
+                userId, user.getEmail(), path, method, cid);
+        } catch (ExpiredJwtException ex) {
+            reason = "jwt_expired";
+            log.warn("[JWT][Filter] expired token path={} method={} reason={} cid={}", 
+                path, method, reason, cid);
+        } catch (MalformedJwtException | SignatureException ex) {
+            reason = "jwt_malformed";
+            log.warn("[JWT][Filter] malformed token path={} method={} reason={} cid={}", 
+                path, method, reason, cid);
+        } catch (JwtException ex) {
+            reason = "jwt_signature_invalid";
+            log.warn("[JWT][Filter] invalid signature path={} method={} reason={} cid={}", 
+                path, method, reason, cid);
         } catch (Exception ex) {
-            log.debug("Failed to authenticate via JWT: {}", ex.getMessage());
+            reason = "jwt_malformed";
+            log.warn("[JWT][Filter] token validation failed path={} method={} reason={} error={} cid={}", 
+                path, method, reason, ex.getClass().getSimpleName(), cid);
         }
     }
 }

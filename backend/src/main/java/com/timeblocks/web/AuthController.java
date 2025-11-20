@@ -120,11 +120,34 @@ public class AuthController {
                     "error", "login_blocked",
                     "message", ex.getMessage()
             ));
+        } catch (IllegalArgumentException ex) {
+            // Handle token/secret decoding errors and other invalid input
+            String message = ex.getMessage();
+            if (message != null && (message.contains("base64") || message.contains("Base64") || message.contains("Illegal"))) {
+                log.error("[Auth][Login][cid={}] Base64 decoding error email={} reason={}", cid, request.email(), message, ex);
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(java.util.Map.of(
+                        "error", "configuration_error",
+                        "message", "Server configuration error: invalid secret encoding"
+                ));
+            }
+            log.warn("[Auth][Login][cid={}] invalid input email={} reason={}", cid, request.email(), message);
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(java.util.Map.of(
+                    "error", "invalid_request",
+                    "message", "Invalid request: " + message
+            ));
+        } catch (io.jsonwebtoken.JwtException ex) {
+            // Handle JWT-related errors (token generation/parsing failures)
+            log.error("[Auth][Login][cid={}] JWT error email={} reason={}", cid, request.email(), ex.getMessage(), ex);
+            // Return 500 for JWT errors as they indicate server configuration issues
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(java.util.Map.of(
+                    "error", "token_error",
+                    "message", "Token generation failed"
+            ));
         } catch (RuntimeException ex) {
-            log.warn("[Auth][Login][cid={}] failure email={} reason={}", cid, request.email(), ex.getMessage());
+            log.error("[Auth][Login][cid={}] unexpected error email={} reason={}", cid, request.email(), ex.getMessage(), ex);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(java.util.Map.of(
                     "error", "login_error",
-                    "message", ex.getMessage()
+                    "message", "An unexpected error occurred during login"
             ));
         }
     }
@@ -230,8 +253,16 @@ public class AuthController {
                 .build();
         ResponseCookie refreshCookie = buildCookie(AuthCookieNames.REFRESH, refreshToken, authProperties.getRefreshTtlDays() * 24 * 3600)
                 .build();
-        response.addHeader(HttpHeaders.SET_COOKIE, accessCookie.toString());
-        response.addHeader(HttpHeaders.SET_COOKIE, refreshCookie.toString());
+        String accessCookieStr = accessCookie.toString();
+        String refreshCookieStr = refreshCookie.toString();
+        log.info("[Auth][Cookies] setting ACCESS cookie: name={} path={} sameSite={} secure={} httpOnly={} maxAge={}", 
+            AuthCookieNames.ACCESS, accessCookie.getPath(), accessCookie.getSameSite(), 
+            accessCookie.isSecure(), accessCookie.isHttpOnly(), accessCookie.getMaxAge());
+        log.info("[Auth][Cookies] setting REFRESH cookie: name={} path={} sameSite={} secure={} httpOnly={} maxAge={}", 
+            AuthCookieNames.REFRESH, refreshCookie.getPath(), refreshCookie.getSameSite(), 
+            refreshCookie.isSecure(), refreshCookie.isHttpOnly(), refreshCookie.getMaxAge());
+        response.addHeader(HttpHeaders.SET_COOKIE, accessCookieStr);
+        response.addHeader(HttpHeaders.SET_COOKIE, refreshCookieStr);
     }
 
     private void clearAuthCookies(HttpServletResponse response) {
@@ -294,7 +325,17 @@ public class AuthController {
     }
 
     private String correlationId(HttpServletRequest request) {
-        return Optional.ofNullable(request.getHeader("X-Correlation-Id")).orElse("no-cid");
+        // Use CorrelationIdHolder if available, otherwise fall back to header
+        try {
+            String cid = com.timeblocks.security.CorrelationIdHolder.get();
+            if (cid != null && !cid.isBlank()) {
+                return cid;
+            }
+        } catch (Exception e) {
+            // Fall through to header check
+        }
+        return Optional.ofNullable(request.getHeader("X-Correlation-Id"))
+                .orElse("no-cid");
     }
 }
 

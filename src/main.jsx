@@ -5,6 +5,7 @@ import App from './App'
 import './index.css'
 import { registerDebugShortcut } from '../shared/logging/shortcut.js'
 import { initThemeFromStorage } from './utils/theme'
+import './auth/debugHooks'
 
 // Register debug shortcut (Ctrl/Cmd + Shift + L)
 registerDebugShortcut();

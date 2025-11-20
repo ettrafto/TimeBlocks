@@ -32,20 +32,30 @@ public class JwtService {
 
     private SecretKey accessKey() {
         if (accessKey == null) {
-            accessKey = Keys.hmacShaKeyFor(Decoders.BASE64.decode(ensureBase64(properties.getAccessSecret())));
+            byte[] keyBytes = ensureKeyBytes(properties.getAccessSecret());
+            accessKey = Keys.hmacShaKeyFor(keyBytes);
         }
         return accessKey;
     }
 
     private SecretKey refreshKey() {
         if (refreshKey == null) {
-            refreshKey = Keys.hmacShaKeyFor(Decoders.BASE64.decode(ensureBase64(properties.getRefreshSecret())));
+            byte[] keyBytes = ensureKeyBytes(properties.getRefreshSecret());
+            refreshKey = Keys.hmacShaKeyFor(keyBytes);
         }
         return refreshKey;
     }
 
-    private String ensureBase64(String secret) {
-        // Allow providing plain text secret by encoding when length < 32 bytes
+    /**
+     * Ensures we have at least 64 bytes of key material for HMAC-SHA512.
+     * The secret from config may be:
+     * 1. URL-safe Base64 encoded (uses - and _)
+     * 2. Standard Base64 encoded (uses + and /)
+     * 3. Plain text (not Base64 at all)
+     * 
+     * Returns raw bytes (not Base64-encoded) ready for Keys.hmacShaKeyFor().
+     */
+    private byte[] ensureKeyBytes(String secret) {
         if (secret == null || secret.isBlank()) {
             secret = UUID.randomUUID().toString().replace("-", "");
         }
@@ -53,24 +63,48 @@ public class JwtService {
         if (decoded.length < 64) {
             return strengthen(decoded);
         }
-        return io.jsonwebtoken.io.Encoders.BASE64.encode(decoded);
+        return decoded;
     }
 
-    private String strengthen(byte[] seed) {
+    private byte[] strengthen(byte[] seed) {
         try {
             MessageDigest sha512 = MessageDigest.getInstance("SHA-512");
-            byte[] derived = sha512.digest(seed);
-            return io.jsonwebtoken.io.Encoders.BASE64.encode(derived);
+            return sha512.digest(seed);
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-512 not available", e);
         }
     }
 
+    /**
+     * Attempts to decode a secret string that may be:
+     * 1. URL-safe Base64 encoded (uses - and _)
+     * 2. Standard Base64 encoded (uses + and /)
+     * 3. Plain text (not Base64 at all)
+     * 
+     * Tries URL-safe first (since JWT uses URL-safe Base64), then standard, then treats as UTF-8.
+     * 
+     * @throws IllegalStateException if there's an unexpected error during decoding
+     */
     private byte[] decodeMaybe(String secret) {
+        if (secret == null || secret.isBlank()) {
+            return new byte[0];
+        }
+        
+        // Try URL-safe Base64 first (JWT standard)
         try {
-            return Decoders.BASE64.decode(secret);
-        } catch (IllegalArgumentException ex) {
-            return secret.getBytes(StandardCharsets.UTF_8);
+            return Decoders.BASE64URL.decode(secret);
+        } catch (IllegalArgumentException | io.jsonwebtoken.io.DecodingException e) {
+            // Not URL-safe Base64, try standard Base64
+            try {
+                return Decoders.BASE64.decode(secret);
+            } catch (IllegalArgumentException | io.jsonwebtoken.io.DecodingException e2) {
+                // Not Base64 at all, treat as plain UTF-8 string
+                // This is the expected path for plain text secrets like "dev-access-secret"
+                return secret.getBytes(StandardCharsets.UTF_8);
+            }
+        } catch (Exception e) {
+            // Catch any other unexpected exceptions during decoding
+            throw new IllegalStateException("Failed to decode secret: " + e.getMessage(), e);
         }
     }
 

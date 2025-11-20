@@ -51,6 +51,7 @@ import ApiTestingPage from './pages/api-testing';
 import DbAdmin from './pages/debug/DbAdmin';
 import SeedTools from './pages/debug/SeedTools';
 import Logs from './pages/debug/Logs';
+import DebugAuthPage from './auth-debug/DebugAuthPage';
 import { eventTypesApi, libraryEventsApi, scheduledEventsApi, CALENDAR_ID } from './services/api';
 import DebugToggle from './components/DebugToggle';
 import { useCreatePageStore } from './store/createPageStore';
@@ -65,6 +66,8 @@ import VerifyEmailPage from './auth/pages/VerifyEmailPage';
 import ResetPasswordPage from './auth/pages/ResetPasswordPage';
 import { useAuthStore } from './auth/store';
 import { useHydrateAuth } from './auth/hooks';
+import { logInfo, logWarn, logError, logDebug, logTBError } from './lib/logging';
+import { isTBError } from './lib/api/normalizeError';
 
 // ========================================
 // PHASE 1 DIAGNOSTICS - Duplicate Draggable Detection
@@ -2002,7 +2005,79 @@ function useSidebarResizeController(initialWidth = 320) {
 // MAIN APP COMPONENT
 // ========================================
 
-function App() {
+// ========================================
+// AUTHENTICATED APP CONTENT - All Main App Logic
+// ========================================
+
+function AuthenticatedAppContent() {
+  // ========================================
+  // ALL HOOKS MUST BE CALLED FIRST (Rules of Hooks)
+  // ========================================
+  
+  // Router hooks
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  // Auth status (read-only, no hydration needed here)
+  const authStatus = useAuthStore((state) => state.status);
+  const isAuthenticated = authStatus === 'authenticated';
+
+  // Sidebar resize hook
+  const { onPointerDown, proxyState } = useSidebarResizeController(320);
+
+  // Date store hooks
+  const { selectedDate, weekStartsOn, viewMode, includeWeekends } = useDateStore();
+  const { setDate, setViewMode, setIncludeWeekends, nextWindow, prevWindow, goToday } = dateStore.actions;
+  const { getDisplayedDays, getVisibleKeys, getDateKey } = dateStore.utils;
+  
+  const displayedDays = useMemo(() => getDisplayedDays(), [selectedDate, viewMode, includeWeekends]);
+  const visibleKeys = useMemo(() => getVisibleKeys(), [selectedDate, viewMode, includeWeekends]);
+  const dateKey = getDateKey();
+
+  // Schedule store hooks
+  const schedStore = useScheduleStore();
+  const _schedRenderTick = useScheduleStore(state => state.byOccId);
+  
+  // Events store hooks
+  const { byId, byDate, getEventsForDate, moveEventToDay, updateEventTime, upsertEvent, findConflictsSameDay, removeEvent } = useEventsStore();
+
+  // State hooks - must all be called unconditionally
+  const [types, setTypes] = useState([]);
+  const [typesLoaded, setTypesLoaded] = useState(false);
+  const [taskTemplates, setTaskTemplates] = useState([]);
+  const [activeDragTemplate, setActiveDragTemplate] = useState(null);
+  const [scheduledItems, setScheduledItems] = useState([]);
+  const [activeId, setActiveId] = useState(null);
+  const [nextId, setNextId] = useState(1);
+  const [activeSidebarTask, setActiveSidebarTask] = useState(null);
+  const [ghostPosition, setGhostPosition] = useState(null);
+  const [pixelsPerSlot, setPixelsPerSlot] = useState(DEFAULT_PIXELS_PER_SLOT);
+  const [isResizing, setIsResizing] = useState(false);
+  const [resizeTarget, setResizeTarget] = useState(null);
+  const [resizeDraft, setResizeDraft] = useState(null);
+  const [showOverlapModal, setShowOverlapModal] = useState(false);
+  const [pendingEvent, setPendingEvent] = useState(null);
+  const [overlappingEvents, setOverlappingEvents] = useState([]);
+  const [pendingAction, setPendingAction] = useState(null);
+  const [showEventEditor, setShowEventEditor] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState(null);
+  const [showTypesManager, setShowTypesManager] = useState(false);
+  const [activeView, setActiveView] = useState('calendar');
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [visibleMonthStart, setVisibleMonthStart] = useState(
+    new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1)
+  );
+  const [settingsVersion, setSettingsVersion] = React.useState(0);
+
+  // Refs
+  const isCommittingRef = React.useRef(false);
+  const calendarDomRef = React.useRef(null);
+  const resizeListenersAttached = React.useRef(false);
+
+  // ========================================
+  // EFFECTS (all called unconditionally)
+  // ========================================
+  
   React.useEffect(() => {
     console.log('🔧 POLICIES LOADED:', {
       MOVE_POLICY,
@@ -2012,116 +2087,97 @@ function App() {
     });
   }, []);
 
-  const location = useLocation();
-  const navigate = useNavigate();
-
-  const authRoutes = ['/login', '/signup', '/verify-email', '/reset-password'];
-  const publicRoutes = ['/'];
-  const isAuthRoute = authRoutes.includes(location.pathname);
-  const isPublicRoute = publicRoutes.includes(location.pathname);
-
-  useHydrateAuth();
-  const authStatus = useAuthStore((state) => state.status);
-
   React.useEffect(() => {
-    console.debug('[AuthGate]', {
+    console.debug('[AuthenticatedApp]', {
       path: location.pathname,
       authStatus,
-      isAuthRoute,
-      isPublicRoute,
     });
-  }, [location.pathname, authStatus, isAuthRoute, isPublicRoute]);
+  }, [location.pathname, authStatus]);
 
+  // Load types from backend on mount (only when authenticated)
   React.useEffect(() => {
-    if (authStatus === 'authenticated' && isAuthRoute) {
-      navigate('/', { replace: true });
+    // Import getCorrelationId dynamically to avoid circular dependencies
+    const getCid = async () => {
+      const { getCorrelationId } = await import('./lib/api/client');
+      return getCorrelationId();
+    };
+    const cidPromise = getCid();
+    const cid = `fe-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`;
+    
+    (async () => {
+      const actualCid = await cidPromise;
+      logInfo('DataLoad][Types', 'effect starting', { cid: actualCid, authStatus, isAuthenticated });
+    })();
+    
+    if (!isAuthenticated) {
+      (async () => {
+        const actualCid = await cidPromise;
+        logInfo('DataLoad][Types', 'gating: skipping - not authenticated', { cid: actualCid, status: authStatus });
+      })();
+      return;
     }
-  }, [authStatus, isAuthRoute, navigate]);
-
-  React.useEffect(() => {
-    if (!isPublicRoute && !isAuthRoute && authStatus === 'unauthenticated') {
-      navigate('/login', { replace: true });
+    
+    if (authStatus !== 'authenticated') {
+      (async () => {
+        const actualCid = await cidPromise;
+        logInfo('DataLoad][Types', `gating: skipping - authStatus is '${authStatus}', not 'authenticated'`, { cid: actualCid });
+      })();
+      return;
     }
-  }, [authStatus, isPublicRoute, isAuthRoute, navigate]);
-
-  if (isAuthRoute) {
-    switch (location.pathname) {
-      case '/login':
-        return <LoginPage />;
-      case '/signup':
-        return <SignupPage />;
-      case '/verify-email':
-        return <VerifyEmailPage />;
-      case '/reset-password':
-        return <ResetPasswordPage />;
-      default:
-        return null;
-    }
-  }
-
-  if (!isPublicRoute && (authStatus === 'idle' || authStatus === 'loading')) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-sm text-gray-500">Loading TimeBlocks…</div>
-      </div>
-    );
-  }
-
-  if (!isPublicRoute && authStatus !== 'authenticated') {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-sm text-gray-500">Redirecting to sign in…</div>
-      </div>
-    );
-  }
-
-  React.useEffect(() => {
-    if (authStatus === 'authenticated') {
-      eventsStore.initialize?.();
-    }
-  }, [authStatus]);
-
-  const { onPointerDown, proxyState } = useSidebarResizeController(320);
-
-  const { selectedDate, weekStartsOn, viewMode, includeWeekends } = useDateStore();
-  const { setDate, setViewMode, setIncludeWeekends, nextWindow, prevWindow, goToday } = dateStore.actions;
-  const { getDisplayedDays, getVisibleKeys, getDateKey } = dateStore.utils;
-  
-  const displayedDays = useMemo(() => getDisplayedDays(), [selectedDate, viewMode, includeWeekends]);
-  const visibleKeys = useMemo(() => getVisibleKeys(), [selectedDate, viewMode, includeWeekends]);
-  const dateKey = getDateKey();
-
-  // Load schedule occurrences for visible range (declared after activeView)
-  const schedStore = useScheduleStore();
-  const _schedRenderTick = useScheduleStore(state => state.byOccId);
-  
-  // When a specific slot's date changes via a menu, re-anchor to that date
-  const handleChangeDay = (index, newDate) => {
-    setDate(newDate);
-  };
-  
-  // ========================================
-  // EVENTS STORE
-  // ========================================
-  
-  const { byId, byDate, getEventsForDate, moveEventToDay, updateEventTime, upsertEvent, findConflictsSameDay, removeEvent } = useEventsStore();
-  
-  // ========================================
-  // STATE INITIALIZATION WITH DEMO DATA
-  // ========================================
-  
-  // State: Types (categories for events) - loaded from backend
-  const [types, setTypes] = useState([]);
-  const [typesLoaded, setTypesLoaded] = useState(false);
-
-  // Load types from backend on mount
-  React.useEffect(() => {
-    if (authStatus !== 'authenticated') return;
+    
     let cancelled = false;
     const loadTypes = async () => {
       try {
+        // Get correlation ID
+        const actualCid = await cidPromise;
+        
+        // Skip cookie wait if already authenticated - cookies are set and will be sent automatically
+        // Only wait for cookies during initial bootstrap (when status might be 'loading' or 'idle')
+        if (authStatus === 'authenticated') {
+          logInfo('DataLoad][Types', 'authStatus is authenticated - skipping cookie wait', { cid: actualCid });
+        } else {
+          // Cookie gate before GET /api/types (only during bootstrap)
+          const { waitForAuthCookies, hasAuthCookies } = await import('./auth/utils/waitForAuthCookies');
+          logInfo('DataLoad][Types', 'waiting for cookies before GET /api/types', { cid: actualCid });
+          
+          // Quick synchronous check first
+          const hasCookiesSync = hasAuthCookies();
+          if (!hasCookiesSync) {
+            logInfo('DataLoad][Types', 'cookies not immediately available, waiting', { cid: actualCid });
+            const cookieResult = await waitForAuthCookies({ timeoutMs: 750, intervalMs: 50 });
+            
+            if (!cookieResult.success) {
+              logWarn('DataLoad][Types', 'cookie gate timeout - proceeding cautiously', {
+                cid: actualCid,
+                access: cookieResult.accessPresent,
+                refresh: cookieResult.refreshPresent,
+                attempts: cookieResult.attempts,
+              });
+            } else {
+              logInfo('DataLoad][Types', 'cookies ready → proceed', {
+                cid: actualCid,
+                elapsedMs: cookieResult.elapsedMs,
+                attempts: cookieResult.attempts,
+              });
+            }
+          } else {
+            logInfo('DataLoad][Types', 'cookies ready → proceed', { cid: actualCid });
+          }
+        }
+        
+        if (cancelled) {
+          logDebug('DataLoad][Types', 'cancelled before fetch', { cid: actualCid });
+          return;
+        }
+        
+        logDebug('DataLoad][Types', 'fetching from backend', { cid: actualCid });
         const backendTypes = await eventTypesApi.getAll();
-        if (cancelled) return;
+        
+        if (cancelled) {
+          logDebug('DataLoad][Types', 'cancelled after fetch', { cid: actualCid });
+          return;
+        }
+        
         const frontendTypes = Array.isArray(backendTypes) ? backendTypes.map(t => ({
           id: t.id,
           name: t.name,
@@ -2130,48 +2186,28 @@ function App() {
         })) : [];
         setTypes(frontendTypes);
         setTypesLoaded(true);
-        console.log('✅ Types loaded from backend:', frontendTypes.length);
+        logInfo('DataLoad][Types', 'success: loaded types', {
+          cid: actualCid,
+          count: frontendTypes.length,
+        });
       } catch (error) {
-        console.error('❌ Failed to load types from backend:', error);
+        const actualCid = await cidPromise;
+        const tbError = isTBError(error) ? error : {
+          status: null,
+          code: null,
+          message: error instanceof Error ? error.message : 'unknown',
+          cid: actualCid,
+        };
+        logTBError('DataLoad][Types', tbError, { cid: actualCid });
         if (cancelled) return;
         setTypes([]);
         setTypesLoaded(true);
       }
     };
+    
     loadTypes();
     return () => { cancelled = true; };
-  }, [authStatus]);
-  
-  // State: Custom task templates (user-created event types)
-  const [taskTemplates, setTaskTemplates] = useState([]);
-  const [activeDragTemplate, setActiveDragTemplate] = useState(null);
-  
-  // State: scheduled items in the calendar
-  const [scheduledItems, setScheduledItems] = useState([]);
-  const [activeId, setActiveId] = useState(null);
-  const [nextId, setNextId] = useState(1);
-  // Overlay preview for sidebar reordering
-  const [activeSidebarTask, setActiveSidebarTask] = useState(null);
-
-  // State: Track ghost/shadow preview position while dragging over calendar
-  const [ghostPosition, setGhostPosition] = useState(null);
-  
-  // State: Zoom level (pixels per 15-minute slot)
-  const [pixelsPerSlot, setPixelsPerSlot] = useState(DEFAULT_PIXELS_PER_SLOT);
-  
-  // State: Resizing
-  const [isResizing, setIsResizing] = useState(false);
-  const [resizeTarget, setResizeTarget] = useState(null); // { id, edge: 'start'|'end', originalStart, originalDuration }
-  const [resizeDraft, setResizeDraft] = useState(null);   // event preview while resizing
-  
-  // State: Modal and overlap handling
-  const [showOverlapModal, setShowOverlapModal] = useState(false);
-  const [pendingEvent, setPendingEvent] = useState(null);
-  const [overlappingEvents, setOverlappingEvents] = useState([]);
-  const [pendingAction, setPendingAction] = useState(null); // For centralized conflict gate
-  
-  // Ref: Prevent double-commits while modal is open
-  const isCommittingRef = React.useRef(false);
+  }, [isAuthenticated, authStatus]);
   
   // Debug: Watch for unexpected state changes
   React.useEffect(() => {
@@ -2183,10 +2219,9 @@ function App() {
     }
   }, [scheduledItems]);
   
-  // Publish scheduled template IDs to UI store to disable dragging duplicates from sidebar
+  // Publish scheduled template IDs to UI store
   React.useEffect(() => {
     try {
-      // Gather from persisted schedules (all cached occurrences) + local legacy scheduledItems
       const allOccs = Object.values(useScheduleStore.getState().byOccId || {});
       const occTaskIds = new Set((allOccs || []).map(o => String(o.taskId)).filter(Boolean));
       const localTemplateIds = new Set(
@@ -2199,44 +2234,204 @@ function App() {
       uiStore.setScheduledTemplateIds(union);
     } catch {}
   }, [_schedRenderTick, scheduledItems]);
-  
-  // State: Event editor modal
-  const [showEventEditor, setShowEventEditor] = useState(false);
-  const [editingTemplate, setEditingTemplate] = useState(null);
-  
-  // State: Types manager modal
-  const [showTypesManager, setShowTypesManager] = useState(false);
-
-  // State: Active navigation view
-  const [activeView, setActiveView] = useState('calendar');
 
   // Ensure backend-backed events store is initialized when entering calendar
   React.useEffect(() => {
-    if (authStatus !== 'authenticated') return;
-    if (activeView !== 'calendar') return;
-    try {
-      console.log('🪝 Initializing events store (backend)');
-      eventsStore.initialize?.();
-    } catch (e) {
-      console.warn('⚠️ eventsStore.initialize not available', e);
+    const getCid = async () => {
+      const { getCorrelationId } = await import('./lib/api/client');
+      return getCorrelationId();
+    };
+    const cidPromise = getCid();
+    
+    (async () => {
+      const actualCid = await cidPromise;
+      logInfo('DataLoad][EventsStore', 'effect starting', {
+        cid: actualCid,
+        authStatus,
+        isAuthenticated,
+        activeView,
+      });
+    })();
+    
+    if (!isAuthenticated) {
+      (async () => {
+        const actualCid = await cidPromise;
+        logInfo('DataLoad][EventsStore', 'gating: skipping - not authenticated', { cid: actualCid, status: authStatus });
+      })();
+      return;
     }
-  }, [activeView, authStatus]);
+    
+    if (authStatus !== 'authenticated') {
+      (async () => {
+        const actualCid = await cidPromise;
+        logInfo('DataLoad][EventsStore', `gating: skipping - authStatus is '${authStatus}', not 'authenticated'`, { cid: actualCid });
+      })();
+      return;
+    }
+    
+    if (activeView !== 'calendar') {
+      (async () => {
+        const actualCid = await cidPromise;
+        logInfo('DataLoad][EventsStore', `gating: skipping - activeView is '${activeView}', not 'calendar'`, { cid: actualCid });
+      })();
+      return;
+    }
+    
+    (async () => {
+      try {
+        const actualCid = await cidPromise;
+        
+        // Skip cookie wait if already authenticated - cookies are set and will be sent automatically
+        // Only wait for cookies during initial bootstrap (when status might be 'loading' or 'idle')
+        if (authStatus === 'authenticated') {
+          logInfo('DataLoad][EventsStore', 'authStatus is authenticated - skipping cookie wait', { cid: actualCid });
+        } else {
+          // Cookie gate before initializing events store (only during bootstrap)
+          const { waitForAuthCookies, hasAuthCookies } = await import('./auth/utils/waitForAuthCookies');
+          logInfo('DataLoad][EventsStore', 'waiting for cookies before initializing', { cid: actualCid });
+          
+          // Quick synchronous check first
+          const hasCookiesSync = hasAuthCookies();
+          if (!hasCookiesSync) {
+            logInfo('DataLoad][EventsStore', 'cookies not immediately available, waiting', { cid: actualCid });
+            const cookieResult = await waitForAuthCookies({ timeoutMs: 750, intervalMs: 50 });
+            
+            if (!cookieResult.success) {
+              logWarn('DataLoad][EventsStore', 'cookie gate timeout - proceeding cautiously', {
+                cid: actualCid,
+                access: cookieResult.accessPresent,
+                refresh: cookieResult.refreshPresent,
+                attempts: cookieResult.attempts,
+              });
+            } else {
+              logInfo('DataLoad][EventsStore', 'cookies ready → proceed', {
+                cid: actualCid,
+                elapsedMs: cookieResult.elapsedMs,
+                attempts: cookieResult.attempts,
+              });
+            }
+          } else {
+            logInfo('DataLoad][EventsStore', 'cookies ready → proceed', { cid: actualCid });
+          }
+        }
+        
+        logDebug('DataLoad][EventsStore', 'initializing events store', { cid: actualCid });
+        eventsStore.initialize?.();
+        logInfo('DataLoad][EventsStore', 'events store initialized', { cid: actualCid });
+      } catch (e) {
+        const actualCid = await cidPromise;
+        const tbError = isTBError(e) ? e : {
+          status: null,
+          code: null,
+          message: e instanceof Error ? e.message : 'unknown',
+          cid: actualCid,
+        };
+        logTBError('DataLoad][EventsStore', tbError, { cid: actualCid });
+      }
+    })();
+  }, [activeView, isAuthenticated, authStatus]);
 
-  // Load scheduled events for visible range on mount/when range changes (after activeView exists)
+  // Load scheduled events for visible range
   React.useEffect(() => {
-    if (authStatus !== 'authenticated') return;
+    // Import getCorrelationId dynamically
+    const getCid = async () => {
+      const { getCorrelationId } = await import('./lib/api/client');
+      return getCorrelationId();
+    };
+    const cidPromise = getCid();
+    
+    (async () => {
+      const actualCid = await cidPromise;
+      logInfo('DataLoad][Events', 'effect starting', {
+        cid: actualCid,
+        authStatus,
+        isAuthenticated,
+        activeView,
+        displayedDaysCount: displayedDays?.length || 0,
+      });
+    })();
+    
+    if (!isAuthenticated) {
+      (async () => {
+        const actualCid = await cidPromise;
+        logInfo('DataLoad][Events', 'gating: skipping - not authenticated', { cid: actualCid, status: authStatus });
+      })();
+      return;
+    }
+    
+    if (authStatus !== 'authenticated') {
+      (async () => {
+        const actualCid = await cidPromise;
+        logInfo('DataLoad][Events', `gating: skipping - authStatus is '${authStatus}', not 'authenticated'`, { cid: actualCid });
+      })();
+      return;
+    }
+    
     let cancelled = false;
     (async () => {
       try {
-        if (activeView !== 'calendar') return;
-        if (!displayedDays || displayedDays.length === 0) return;
+        const actualCid = await cidPromise;
+        
+        if (activeView !== 'calendar') {
+          logInfo('DataLoad][Events', `gating: skipping - activeView is '${activeView}', not 'calendar'`, { cid: actualCid });
+          return;
+        }
+        if (!displayedDays || displayedDays.length === 0) {
+          logInfo('DataLoad][Events', 'gating: skipping - no displayedDays', { cid: actualCid });
+          return;
+        }
+        
+        // Skip cookie wait if already authenticated - cookies are set and will be sent automatically
+        // Only wait for cookies during initial bootstrap (when status might be 'loading' or 'idle')
+        if (authStatus === 'authenticated') {
+          logInfo('DataLoad][Events', 'authStatus is authenticated - skipping cookie wait', { cid: actualCid });
+        } else {
+          // Cookie gate before GET /api/calendars/.../events (only during bootstrap)
+          const { waitForAuthCookies, hasAuthCookies } = await import('./auth/utils/waitForAuthCookies');
+          logInfo('DataLoad][Events', 'waiting for cookies before GET /api/calendars/.../events', { cid: actualCid });
+          
+          // Quick synchronous check first
+          const hasCookiesSync = hasAuthCookies();
+          if (!hasCookiesSync) {
+            logInfo('DataLoad][Events', 'cookies not immediately available, waiting', { cid: actualCid });
+            const cookieResult = await waitForAuthCookies({ timeoutMs: 750, intervalMs: 50 });
+            
+            if (!cookieResult.success) {
+              logWarn('DataLoad][Events', 'cookie gate timeout - proceeding cautiously', {
+                cid: actualCid,
+                access: cookieResult.accessPresent,
+                refresh: cookieResult.refreshPresent,
+                attempts: cookieResult.attempts,
+              });
+            } else {
+              logInfo('DataLoad][Events', 'cookies ready → proceed', {
+                cid: actualCid,
+                elapsedMs: cookieResult.elapsedMs,
+                attempts: cookieResult.attempts,
+              });
+            }
+          } else {
+            logInfo('DataLoad][Events', 'cookies ready → proceed', { cid: actualCid });
+          }
+        }
+        
+        if (cancelled) {
+          logDebug('DataLoad][Events', 'cancelled before fetch', { cid: actualCid });
+          return;
+        }
+        
         const first = displayedDays[0];
         const last = displayedDays[displayedDays.length - 1];
         const from = new Date(first.getFullYear(), first.getMonth(), first.getDate(), 0, 0, 0, 0).toISOString();
         const to = new Date(last.getFullYear(), last.getMonth(), last.getDate(), 23, 59, 59, 999).toISOString();
-        console.log('📬 Loading scheduled (visible range)', { from, to, CALENDAR_ID });
+        logDebug('DataLoad][Events', 'fetching scheduled events', { cid: actualCid, from, to });
         const rows = await scheduledEventsApi.getForRange(from, to, CALENDAR_ID);
-        console.log('📦 API returned rows', { count: Array.isArray(rows) ? rows.length : 0, sample: rows?.[0] });
+        
+        if (cancelled) {
+          logDebug('DataLoad][Events', 'cancelled after fetch', { cid: actualCid });
+          return;
+        }
+        
         const mapped = (Array.isArray(rows) ? rows : []).map((o) => {
           const s = parseISO(o.startUtc);
           const e = parseISO(o.endUtc);
@@ -2254,54 +2449,176 @@ function App() {
             templateTaskId: o.taskId ? String(o.taskId) : undefined,
           };
         });
-        console.log('🗂️ Mapped scheduledItems', { count: mapped.length, days: [...new Set(mapped.map(m => m.dateKey))] });
+        logInfo('DataLoad][Events', 'success: loaded events', {
+          cid: actualCid,
+          count: mapped.length,
+        });
         if (!cancelled) setScheduledItems(mapped);
       } catch (e) {
-        console.error('❌ Failed to load visible scheduled events', e);
+        const actualCid = await cidPromise;
+        const tbError = isTBError(e) ? e : {
+          status: null,
+          code: null,
+          message: e instanceof Error ? e.message : 'unknown',
+          cid: actualCid,
+        };
+        logTBError('DataLoad][Events', tbError, { cid: actualCid });
         if (!cancelled) setScheduledItems([]);
       }
     })();
     return () => { cancelled = true; };
-  }, [activeView, authStatus, displayedDays.map(d => d.toDateString()).join('|')]);
+  }, [activeView, isAuthenticated, authStatus, displayedDays.map(d => d.toDateString()).join('|')]);
 
   // Load schedule occurrences for visible range (new schedules API)
   React.useEffect(() => {
-    if (authStatus !== 'authenticated') return;
-    if (activeView !== 'calendar' || !displayedDays || displayedDays.length === 0) return;
-    const first = displayedDays[0];
-    const last = displayedDays[displayedDays.length - 1];
-    const fromMs = new Date(first.getFullYear(), first.getMonth(), first.getDate(), 0, 0, 0, 0).getTime();
-    const toMs = new Date(last.getFullYear(), last.getMonth(), last.getDate(), 23, 59, 59, 999).getTime();
-    schedStore.loadRange({ timeMin: fromMs, timeMax: toMs, laneId: undefined, force: false });
-  }, [activeView, authStatus, displayedDays.map(d => d.toDateString()).join('|')]);
-
-  // State: Calendar popover for active day selector
-  const [calendarOpen, setCalendarOpen] = useState(false);
-  const [visibleMonthStart, setVisibleMonthStart] = useState(
-    new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1)
-  );
+    const getCid = async () => {
+      const { getCorrelationId } = await import('./lib/api/client');
+      return getCorrelationId();
+    };
+    const cidPromise = getCid();
+    
+    (async () => {
+      const actualCid = await cidPromise;
+      logInfo('DataLoad][Schedules', 'effect starting', {
+        cid: actualCid,
+        authStatus,
+        isAuthenticated,
+        activeView,
+        displayedDaysCount: displayedDays?.length || 0,
+      });
+    })();
+    
+    if (!isAuthenticated) {
+      (async () => {
+        const actualCid = await cidPromise;
+        logInfo('DataLoad][Schedules', 'gating: skipping - not authenticated', { cid: actualCid, status: authStatus });
+      })();
+      return;
+    }
+    
+    if (authStatus !== 'authenticated') {
+      (async () => {
+        const actualCid = await cidPromise;
+        logInfo('DataLoad][Schedules', `gating: skipping - authStatus is '${authStatus}', not 'authenticated'`, { cid: actualCid });
+      })();
+      return;
+    }
+    
+    if (activeView !== 'calendar' || !displayedDays || displayedDays.length === 0) {
+      (async () => {
+        const actualCid = await cidPromise;
+        logInfo('DataLoad][Schedules', 'gating: skipping - activeView/displayedDays check', {
+          cid: actualCid,
+          activeView,
+          displayedDaysCount: displayedDays?.length || 0,
+        });
+      })();
+      return;
+    }
+    
+    (async () => {
+      try {
+        const actualCid = await cidPromise;
+        
+        // Skip cookie wait if already authenticated - cookies are set and will be sent automatically
+        // Only wait for cookies during initial bootstrap (when status might be 'loading' or 'idle')
+        if (authStatus === 'authenticated') {
+          logInfo('DataLoad][Schedules', 'authStatus is authenticated - skipping cookie wait', { cid: actualCid });
+        } else {
+          // Cookie gate before GET /api/schedules (only during bootstrap)
+          const { waitForAuthCookies, hasAuthCookies } = await import('./auth/utils/waitForAuthCookies');
+          logInfo('DataLoad][Schedules', 'waiting for cookies before GET /api/schedules', { cid: actualCid });
+          
+          // Quick synchronous check first
+          const hasCookiesSync = hasAuthCookies();
+          if (!hasCookiesSync) {
+            logInfo('DataLoad][Schedules', 'cookies not immediately available, waiting', { cid: actualCid });
+            const cookieResult = await waitForAuthCookies({ timeoutMs: 750, intervalMs: 50 });
+            
+            if (!cookieResult.success) {
+              logWarn('DataLoad][Schedules', 'cookie gate timeout - proceeding cautiously', {
+                cid: actualCid,
+                access: cookieResult.accessPresent,
+                refresh: cookieResult.refreshPresent,
+                attempts: cookieResult.attempts,
+              });
+            } else {
+              logInfo('DataLoad][Schedules', 'cookies ready → proceed', {
+                cid: actualCid,
+                elapsedMs: cookieResult.elapsedMs,
+                attempts: cookieResult.attempts,
+              });
+            }
+          } else {
+            logInfo('DataLoad][Schedules', 'cookies ready → proceed', { cid: actualCid });
+          }
+        }
+        
+        const first = displayedDays[0];
+        const last = displayedDays[displayedDays.length - 1];
+        const fromMs = new Date(first.getFullYear(), first.getMonth(), first.getDate(), 0, 0, 0, 0).getTime();
+        const toMs = new Date(last.getFullYear(), last.getMonth(), last.getDate(), 23, 59, 59, 999).getTime();
+        logDebug('DataLoad][Schedules', 'calling schedStore.loadRange', {
+          cid: actualCid,
+          fromMs,
+          toMs,
+        });
+        schedStore.loadRange({ timeMin: fromMs, timeMax: toMs, laneId: undefined, force: false });
+        logInfo('DataLoad][Schedules', 'loadRange called', { cid: actualCid });
+      } catch (e) {
+        const actualCid = await cidPromise;
+        const tbError = isTBError(e) ? e : {
+          status: null,
+          code: null,
+          message: e instanceof Error ? e.message : 'unknown',
+          cid: actualCid,
+        };
+        logTBError('DataLoad][Schedules', tbError, { cid: actualCid });
+      }
+    })();
+  }, [activeView, isAuthenticated, authStatus, displayedDays.map(d => d.toDateString()).join('|')]);
 
   // Update visible month when selected date changes
   React.useEffect(() => {
     setVisibleMonthStart(new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1));
   }, [selectedDate]);
 
-  // Ref: Calendar DOM element for resize calculations
-  const calendarDomRef = React.useRef(null);
-  
-  // Ref: Track if window listeners are attached (prevent duplicate attachment)
-  const resizeListenersAttached = React.useRef(false);
-
   // Update global resize state for duplicate detection
   React.useEffect(() => {
     setResizingState(isResizing);
   }, [isResizing]);
 
+  // Apply settings-driven calendar values and week start/work days
+  React.useEffect(() => {
+    const unsub = settingsStore.subscribe((s) => {
+      const before = { start: START_HOUR_DYN, end: END_HOUR_DYN, fmt: TIME_FORMAT_DYN };
+      refreshCalendarFromSettings();
+      setSettingsVersion((v) => v + 1);
+      try {
+        const ws = s.general?.weekStart === 'Sun' ? 0 : 1;
+        const wd = s.general?.workDays || ['Mon','Tue','Wed','Thu','Fri'];
+        dateStore.actions.setWeekStartsOn(ws);
+        dateStore.actions.setWorkDays(wd);
+        log.info(['Settings','Apply'], 'dateStore updated', { weekStartsOn: ws, workDays: wd });
+      } catch {}
+      log.info(['Settings','Apply'], 'calendar refresh', { before, after: { start: START_HOUR_DYN, end: END_HOUR_DYN, fmt: TIME_FORMAT_DYN } });
+    });
+    // apply once on mount
+    try {
+      const s = settingsStore.get();
+      const ws = s.general?.weekStart === 'Sun' ? 0 : 1;
+      const wd = s.general?.workDays || ['Mon','Tue','Wed','Thu','Fri'];
+      dateStore.actions.setWeekStartsOn(ws);
+      dateStore.actions.setWorkDays(wd);
+    } catch {}
+    return () => { try { unsub?.(); } catch {} };
+  }, []);
+
   // ========================================
-  // CONFLICT DETECTION (bitset-based, draft-aware)
+  // MEMOIZED VALUES (useMemo hooks)
   // ========================================
   
-  // Track which event is being moved/resized (exclude from occupancy to avoid self-conflict)
+  // Track which event is being moved/resized
   const movingId = useMemo(() => {
     if (resizeDraft && resizeDraft.id) return resizeDraft.id;
     if (activeId && activeId.startsWith('scheduled-')) return activeId;
@@ -2310,7 +2627,6 @@ function App() {
   
   // Build draft candidate from current ghost position or resize draft
   const draftCandidate = useMemo(() => {
-    // Priority 1: Resize draft (active resize operation)
     if (resizeDraft && resizeDraft.dateKey) {
       const draft = {
         id: resizeDraft.id,
@@ -2322,8 +2638,6 @@ function App() {
       if (DEBUG_CONFLICTS) console.log('📝 Draft from RESIZE:', draft);
       return draft;
     }
-    
-    // Priority 2: Ghost position (dragging new or existing event)
     if (ghostPosition && ghostPosition.startMinutes != null) {
       const duration = ghostPosition.task?.duration || ghostPosition.duration || MINUTES_PER_SLOT;
       const targetDayKey = ghostPosition.dayKey || dateKey;
@@ -2337,15 +2651,10 @@ function App() {
       if (DEBUG_CONFLICTS) console.log('📝 Draft from GHOST:', draft);
       return draft;
     }
-    
-    if (DEBUG_CONFLICTS && (resizeDraft || ghostPosition)) {
-      console.log('⚠️ Draft conditions not met:', { resizeDraft, ghostPosition });
-    }
-    
     return null;
   }, [resizeDraft, ghostPosition, movingId, dateKey]);
   
-  // Build occupancy map (exclude moving event to avoid self-conflict)
+  // Build occupancy map
   const occupancy = useMemo(
     () => buildDayOccupancy(scheduledItems, movingId || null),
     [scheduledItems, movingId]
@@ -2353,15 +2662,8 @@ function App() {
   
   // Check if draft has live conflict
   const liveConflict = useMemo(() => {
-    if (!draftCandidate) {
-      if (DEBUG_CONFLICTS && (resizeDraft || ghostPosition)) {
-        console.log('⚠️ liveConflict: No draftCandidate despite resize/ghost state');
-      }
-      return false;
-    }
-    
+    if (!draftCandidate) return false;
     const conflict = isConflicting(draftCandidate, occupancy);
-    
     if (DEBUG_CONFLICTS) {
       console.log('🎯 Live Conflict Check:', {
         draftCandidate,
@@ -2369,11 +2671,10 @@ function App() {
         occupancyDays: Array.from(occupancy.keys()),
       });
     }
-    
     return conflict;
   }, [draftCandidate, occupancy, resizeDraft, ghostPosition]);
   
-  // Conflict UI state for passing to calendar
+  // Conflict UI state
   const conflictUi = useMemo(() => {
     const ui = {
       dayKey: draftCandidate?.dateKey || null,
@@ -2381,39 +2682,77 @@ function App() {
       draftCandidate,
       movingId,
     };
-    
     if (DEBUG_CONFLICTS && liveConflict) {
       console.log('🔴 CONFLICT UI STATE:', ui);
     }
-    
     return ui;
   }, [draftCandidate, liveConflict, movingId]);
 
-  // MOVED TO DndEventMonitor COMPONENT (must be child of DndContext)
-
-  // ========================================
-  // SENSORS - Memoized to prevent "useEffect dependency array changed size" warning
-  // ========================================
   // Determine if we should use inert sensors
   const useInert = isResizing || !!resizeDraft || !!resizeTarget;
   
-  // Create sensor based on current state (always returns array of same structure)
-  // When inert: disable the sensor internally rather than changing array size
+  // Create sensor
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: useInert 
-        ? { distance: 999999 } // Effectively disabled (unreachable threshold)
+        ? { distance: 999999 }
         : { distance: 8 },
     })
   );
-  
+
+  // Get active item for drag overlay
+  const activeItem = React.useMemo(() => {
+    if (!activeId) return null;
+    if (activeId.startsWith('template-')) {
+      let template = taskTemplates.find((t) => `template-${t.id}` === activeId);
+      if (!template && activeDragTemplate && `template-${activeDragTemplate.id}` === activeId) {
+        template = activeDragTemplate;
+      }
+      if (!template) {
+        console.warn('⚠️ DragOverlay: Template not found for activeId:', activeId);
+      }
+      return template || null;
+    } else {
+      const scheduledItem = scheduledItems.find((item) => item.id === activeId);
+      if (!scheduledItem) {
+        console.warn('⚠️ DragOverlay: Scheduled item not found for activeId:', activeId);
+      }
+      return scheduledItem || null;
+    }
+  }, [activeId, taskTemplates, scheduledItems, activeDragTemplate]);
 
   // ========================================
-  // ZOOM HANDLER
+  // HANDLERS (useCallback hooks)
   // ========================================
+  
   const handleZoom = React.useCallback((newPixelsPerSlot) => {
     setPixelsPerSlot(newPixelsPerSlot);
   }, []);
+
+  // When a specific slot's date changes via a menu, re-anchor to that date
+  const handleChangeDay = (index, newDate) => {
+    setDate(newDate);
+  };
+
+  // ========================================
+  // ROUTING (after all hooks)
+  // ========================================
+  
+  // Special routes that don't need DndContext wrapper
+  if (location.pathname === '/backend-test') {
+    return <BackendTest />;
+  }
+
+  if (location.pathname === '/api-testing' || location.pathname.startsWith('/api-testing/')) {
+    return <ApiTestingPage />;
+  }
+
+  // ========================================
+  // CONFLICT DETECTION (bitset-based, draft-aware)
+  // ========================================
+  
+  // MOVED TO DndEventMonitor COMPONENT (must be child of DndContext)
+  
 
   // ========================================
   // TYPE MANAGEMENT HANDLERS
@@ -3354,105 +3693,14 @@ function App() {
   }
 
   // ========================================
-  // GET ACTIVE ITEM FOR DRAG OVERLAY
-  // Safely lookup the item being dragged, with fallback for undefined results
-  // ========================================
-  const activeItem = React.useMemo(() => {
-    if (!activeId) return null;
-    
-    if (activeId.startsWith('template-')) {
-      let template = taskTemplates.find((t) => `template-${t.id}` === activeId);
-      if (!template && activeDragTemplate && `template-${activeDragTemplate.id}` === activeId) {
-        template = activeDragTemplate;
-      }
-      if (!template) {
-        console.warn('⚠️ DragOverlay: Template not found for activeId:', activeId);
-      }
-      return template || null;
-    } else {
-      const scheduledItem = scheduledItems.find((item) => item.id === activeId);
-      if (!scheduledItem) {
-        console.warn('⚠️ DragOverlay: Scheduled item not found for activeId:', activeId);
-      }
-      return scheduledItem || null;
-    }
-  }, [activeId, taskTemplates, scheduledItems]);
-
   // Route handling using React Router
   const showDiagnostics = import.meta.env.VITE_SHOW_DIAGNOSTICS === 'true';
-  const [settingsVersion, setSettingsVersion] = React.useState(0);
-
-  // Apply settings-driven calendar values and week start/work days
-  React.useEffect(() => {
-    const unsub = settingsStore.subscribe((s) => {
-      const before = { start: START_HOUR_DYN, end: END_HOUR_DYN, fmt: TIME_FORMAT_DYN };
-      refreshCalendarFromSettings();
-      setSettingsVersion((v) => v + 1);
-      try {
-        const ws = s.general?.weekStart === 'Sun' ? 0 : 1;
-        const wd = s.general?.workDays || ['Mon','Tue','Wed','Thu','Fri'];
-        dateStore.actions.setWeekStartsOn(ws);
-        dateStore.actions.setWorkDays(wd);
-        log.info(['Settings','Apply'], 'dateStore updated', { weekStartsOn: ws, workDays: wd });
-      } catch {}
-      log.info(['Settings','Apply'], 'calendar refresh', { before, after: { start: START_HOUR_DYN, end: END_HOUR_DYN, fmt: TIME_FORMAT_DYN } });
-    });
-    // apply once on mount
-    try {
-      const s = settingsStore.get();
-      const ws = s.general?.weekStart === 'Sun' ? 0 : 1;
-      const wd = s.general?.workDays || ['Mon','Tue','Wed','Thu','Fri'];
-      dateStore.actions.setWeekStartsOn(ws);
-      dateStore.actions.setWorkDays(wd);
-    } catch {}
-    return () => { try { unsub?.(); } catch {} };
-  }, []);
 
   // Determine active view from pathname
   const getActiveView = () => {
     if (location.pathname === '/create') return 'create';
     return activeView;
   };
-
-  if (isAuthRoute) {
-    if (location.pathname === '/login') {
-      return <LoginPage />
-    }
-    if (location.pathname === '/signup') {
-      return <SignupPage />
-    }
-    if (location.pathname === '/verify-email') {
-      return <VerifyEmailPage />
-    }
-    if (location.pathname === '/reset-password') {
-      return <ResetPasswordPage />
-    }
-  }
-
-  if (authStatus === 'idle' || authStatus === 'loading') {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-sm text-gray-500">Loading TimeBlocks…</div>
-      </div>
-    );
-  }
-
-  if (authStatus !== 'authenticated') {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-sm text-gray-500">Redirecting to sign in…</div>
-      </div>
-    );
-  }
-
-  // If on special routes, render without DndContext wrapper
-  if (location.pathname === '/backend-test') {
-    return <BackendTest />;
-  }
-
-  if (location.pathname === '/api-testing' || location.pathname.startsWith('/api-testing/')) {
-    return <ApiTestingPage />;
-  }
 
   if (location.pathname === '/debug/db-admin') {
     return <DbAdmin />;
@@ -3464,6 +3712,10 @@ function App() {
 
   if (location.pathname === '/debug/logs') {
     return <Logs />;
+  }
+
+  if (location.pathname === '/auth-debug') {
+    return <DebugAuthPage />;
   }
 
   if (location.pathname === '/profile') {
@@ -3963,6 +4215,116 @@ function App() {
   );
 }
 
-export default App;
+// ========================================
+// APP ROOT - Auth Bootstrap Only
+// ========================================
+
+function AppRoot() {
+  // 1. Unconditional hooks (always called in same order)
+  useHydrateAuth();
+  const authStatus = useAuthStore((state) => state.status);
+  
+  // 2. Derive flags (not hooks)
+  const isLoading = authStatus === 'loading' || authStatus === 'idle';
+  const isAuthenticated = authStatus === 'authenticated';
+  const isUnauthenticated = authStatus === 'unauthenticated';
+  
+  // 3. Conditional rendering (NO hooks below this line)
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-sm text-gray-500">Loading TimeBlocks…</div>
+      </div>
+    );
+  }
+  
+  if (isUnauthenticated) {
+    return <UnauthenticatedShell />;
+  }
+  
+  return <AuthenticatedShell />;
+}
+
+// ========================================
+// UNAUTHENTICATED SHELL - Login/Signup Pages
+// ========================================
+
+function UnauthenticatedShell() {
+  // Minimal hooks for routing
+  const location = useLocation();
+  const navigate = useNavigate();
+  
+  const authRoutes = ['/login', '/signup', '/verify-email', '/reset-password'];
+  const isAuthRoute = authRoutes.includes(location.pathname);
+  
+  // Redirect authenticated users away from auth routes
+  React.useEffect(() => {
+    const authStatus = useAuthStore.getState().status;
+    if (authStatus === 'authenticated' && isAuthRoute) {
+      navigate('/', { replace: true });
+    }
+  }, [isAuthRoute, navigate]);
+  
+  // Render auth pages
+  if (isAuthRoute) {
+    switch (location.pathname) {
+      case '/login':
+        return <LoginPage />;
+      case '/signup':
+        return <SignupPage />;
+      case '/verify-email':
+        return <VerifyEmailPage />;
+      case '/reset-password':
+        return <ResetPasswordPage />;
+      default:
+        return null;
+    }
+  }
+  
+  // If not on an auth route, redirect to login
+  React.useEffect(() => {
+    if (!isAuthRoute) {
+      navigate('/login', { replace: true });
+    }
+  }, [isAuthRoute, navigate]);
+  
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="text-sm text-gray-500">Redirecting to sign in…</div>
+    </div>
+  );
+}
+
+// ========================================
+// AUTHENTICATED SHELL - Main App with Data Loading
+// ========================================
+
+function AuthenticatedShell() {
+  // 1. Unconditional hooks (always called in same order)
+  const authStatus = useAuthStore((state) => state.status);
+  const authUser = useAuthStore((state) => state.user);
+  const isAuthenticated = authStatus === 'authenticated';
+  
+  // 2. Data loading effects (gated INSIDE the effect, not conditionally called)
+  React.useEffect(() => {
+    console.log('[AuthShell] effect: eventsStore.initialize', { 
+      status: authStatus, 
+      isAuthenticated,
+      user: authUser ? { id: authUser.id, email: authUser.email } : null 
+    });
+    if (!isAuthenticated) {
+      console.log('[AuthShell] skipping eventsStore.initialize - not authenticated');
+      return;
+    }
+    console.log('[AuthShell] calling eventsStore.initialize');
+    eventsStore.initialize?.();
+  }, [isAuthenticated, authStatus, authUser]);
+  
+  // 3. Render authenticated app content
+  return <AuthenticatedAppContent />;
+}
+
+// Export AppRoot as the default
+export default AppRoot;
 
 

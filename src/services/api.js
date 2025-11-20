@@ -1,64 +1,74 @@
 // API Service Layer for TimeBlocks Backend
+// 
+// This module provides domain-focused wrappers around the unified HTTP client (client.ts).
+// All requests go through client.ts which handles:
+// - Automatic refresh-on-401
+// - CSRF token attachment
+// - Correlation ID management
+// - Error normalization (TBError)
+// - HTTP-level logging
+//
+// This module adds domain-level logging and maintains the existing public API.
 
 import { TBLog } from "../../shared/logging/logger.js";
-import { newCorrelationId } from "../../shared/logging/correlation.js";
+import { apiRequest as httpRequest, getCorrelationId, ensureCsrfForMutations } from "../lib/api/client";
+import { logInfo, logWarn, logError, logDebug } from "../lib/logging";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8080";
 const WORKSPACE_ID = import.meta.env.VITE_WORKSPACE_ID ?? "ws_dev";
 const CALENDAR_ID = import.meta.env.VITE_CALENDAR_ID ?? "cal_main";
 
-const withTimeout = (promise, ms = 12000) =>
-  Promise.race([
-    promise,
-    new Promise((_, rej) => setTimeout(() => rej(new Error(`Request timeout after ${ms}ms`)), ms))
-  ]);
-
-export async function apiRequest(path, { method = "GET", body, headers = {}, correlationId } = {}) {
-  const url = `${API_BASE}${path}`;
-  const cid = correlationId ?? newCorrelationId("api");
-  const g = TBLog.group(`API ${method} ${url}`, cid);
+/**
+ * Thin wrapper around the unified HTTP client (client.ts).
+ * Adds domain-level logging while delegating all HTTP logic to client.ts.
+ * 
+ * @param path - API path (e.g., '/api/types')
+ * @param options - Request options (method, body, headers)
+ * @returns Promise with response data
+ */
+export async function apiRequest(path, { method = "GET", body, headers = {} } = {}) {
+  const cid = getCorrelationId();
+  const g = TBLog.group(`API ${method} ${path}`, cid);
+  
+  logInfo('API', `${method} ${path}`, { cid });
   
   try {
-    // Add correlation ID to headers
-    const requestHeaders = { 
-      "Content-Type": "application/json", 
-      "X-Correlation-Id": cid,
-      ...headers 
-    };
+    TBLog.kv("Request", { path, method, body });
     
-    const opts = {
+    // Delegate to unified HTTP client (client.ts)
+    // This handles: credentials, CSRF, correlation IDs, refresh-on-401, error normalization
+    const result = await httpRequest(path, {
       method,
-      headers: requestHeaders,
-      body: body ? JSON.stringify(body) : undefined,
-    };
+      body,
+      headers,
+    });
     
-    TBLog.kv("Request", { url, method, headers: requestHeaders, body });
+    TBLog.kv("Response", { status: 200, result });
+    logInfo('API', `${method} ${path} success`, { cid });
     
-    const res = await withTimeout(fetch(url, opts));
-    const status = res.status;
+    return result;
+  } catch (error) {
+    // Error is already a TBError from client.ts
+    const status = error?.status || null;
+    const code = error?.code || null;
     
-    let json = null;
-    let text = null;
-    try { 
-      const ct = res.headers.get("content-type") || "";
-      if (ct.includes("application/json")) {
-        json = await res.json();
-      } else {
-        text = await res.text();
-      }
-    } catch { /* no body */ }
+    TBLog.error("API request failed", { status, code, error });
     
-    TBLog.kv("Response", { status, json: json ?? text });
-    
-    if (!res.ok) {
-      TBLog.error("API request failed", { status, error: json ?? text });
-      throw new Error(`API ${method} ${url} failed: ${status} ${JSON.stringify(json ?? text)}`);
+    // Domain-level error logging (HTTP-level logging already done in client.ts)
+    if (status === 401) {
+      logWarn('API', `${method} ${path} unauthorized`, {
+        cid,
+        code,
+      });
+    } else {
+      logError('API', `${method} ${path} failed`, {
+        cid,
+        status,
+        code,
+      });
     }
     
-    return json ?? text;
-  } catch (e) {
-    TBLog.error("Network/Client error", e);
-    throw e;
+    throw error; // Re-throw TBError from client.ts
   } finally {
     g.end();
   }
@@ -70,24 +80,68 @@ export async function apiRequest(path, { method = "GET", body, headers = {}, cor
 
 export const eventTypesApi = {
   // Get all types (workspace ignored; backend uses single set)
-  getAll: () => apiRequest(`/api/types`),
+  getAll: async () => {
+    const cid = getCorrelationId();
+    logInfo('API][Types', 'getAll start', { cid });
+    try {
+      const result = await apiRequest(`/api/types`);
+      logInfo('API][Types', 'getAll success', { cid, count: Array.isArray(result) ? result.length : 0 });
+      return result;
+    } catch (error) {
+      logError('API][Types', 'getAll failed', { cid, status: error?.status, code: error?.code });
+      throw error;
+    }
+  },
 
   // Create a new type
-  create: (type) => apiRequest(`/api/types`, {
-    method: 'POST',
-    body: type,
-  }),
+  create: async (type) => {
+    const cid = getCorrelationId();
+    logInfo('API][Types', 'create start', { cid, typeId: type?.id });
+    try {
+      const result = await apiRequest(`/api/types`, {
+        method: 'POST',
+        body: type,
+      });
+      logInfo('API][Types', 'create success', { cid, typeId: result?.id });
+      return result;
+    } catch (error) {
+      logError('API][Types', 'create failed', { cid, status: error?.status, code: error?.code });
+      throw error;
+    }
+  },
 
   // Update a type (PATCH aligns with backend controller)
-  update: (id, type) => apiRequest(`/api/types/${id}`, {
-    method: 'PATCH',
-    body: type,
-  }),
+  update: async (id, type) => {
+    const cid = getCorrelationId();
+    logInfo('API][Types', 'update start', { cid, typeId: id });
+    try {
+      const result = await apiRequest(`/api/types/${id}`, {
+        method: 'PATCH',
+        body: type,
+      });
+      logInfo('API][Types', 'update success', { cid, typeId: id });
+      return result;
+    } catch (error) {
+      logError('API][Types', 'update failed', { cid, typeId: id, status: error?.status, code: error?.code });
+      throw error;
+    }
+  },
 
   // Delete a type
-  delete: (id) => apiRequest(`/api/types/${id}`, {
-    method: 'DELETE',
-  }),
+  delete: async (id) => {
+    const cid = getCorrelationId();
+    logInfo('API][Types', 'delete start', { cid, typeId: id });
+    try {
+      const result = await apiRequest(`/api/types/${id}`, {
+        method: 'DELETE',
+      });
+      logInfo('API][Types', 'delete success', { cid, typeId: id });
+      return result;
+    } catch (error) {
+      logError('API][Types', 'delete failed', { cid, typeId: id, status: error?.status, code: error?.code });
+      throw error;
+    }
+  },
 };
 
 // ========================================
@@ -124,17 +178,26 @@ export const libraryEventsApi = {
 export const scheduledEventsApi = {
   // Get occurrences for calendar/date range, map to Event-like shape expected by store
   getForRange: async (from, to, calendarId = CALENDAR_ID) => {
-    const occs = await apiRequest(`/api/calendars/${encodeURIComponent(calendarId)}/events?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
-    // Map occurrences -> event rows the store expects (id/title/startUtc/endUtc/typeId)
-    return Array.isArray(occs) ? occs.map(o => ({
-      id: o.event_id,
-      taskId: o.taskId ?? null,
-      title: o.title,
-      startUtc: o.start,
-      endUtc: o.end,
-      typeId: o.type_id ?? null,
-      libraryEventId: null,
-    })) : [];
+    const cid = getCorrelationId();
+    logInfo('API][Events', 'getForRange start', { cid, calendarId, from, to });
+    try {
+      const occs = await apiRequest(`/api/calendars/${encodeURIComponent(calendarId)}/events?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+      // Map occurrences -> event rows the store expects (id/title/startUtc/endUtc/typeId)
+      const mapped = Array.isArray(occs) ? occs.map(o => ({
+        id: o.event_id,
+        taskId: o.taskId ?? null,
+        title: o.title,
+        startUtc: o.start,
+        endUtc: o.end,
+        typeId: o.type_id ?? null,
+        libraryEventId: null,
+      })) : [];
+      logInfo('API][Events', 'getForRange success', { cid, calendarId, count: mapped.length });
+      return mapped;
+    } catch (error) {
+      logError('API][Events', 'getForRange failed', { cid, calendarId, status: error?.status, code: error?.code });
+      throw error;
+    }
   },
 
   // Create an event (translate to backend payload)

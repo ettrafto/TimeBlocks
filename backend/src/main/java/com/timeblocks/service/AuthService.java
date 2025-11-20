@@ -143,8 +143,7 @@ public class AuthService {
 
     @Transactional
     public RefreshTokenPair rotateRefresh(AuthToken token, User user) {
-        refreshTokenService.revoke(token, true);
-        return refreshTokenService.issue(user);
+        return refreshTokenService.rotateRefresh(token, user);
     }
 
     @Transactional

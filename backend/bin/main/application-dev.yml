@@ -35,7 +35,7 @@ auth:
     max: ${RATE_LIMIT_MAX:20}
   cookie-domain: ${COOKIE_DOMAIN:}
   cookie-secure: false
-  cookie-same-site: None
+  cookie-same-site: Lax  # Lax works for localhost with different ports (same-site)
   notifications:
     log-codes: true
 
