@@ -172,7 +172,9 @@ export async function logout(options?: AuthClientRequestOptions): Promise<Logout
   } catch (err) {
     // Even if logout fails, we should clear local state
     // The error is logged but not thrown
-    console.warn('[Auth] logout request failed, but clearing local state', err);
+    if (import.meta.env.DEV) {
+      console.warn('[Auth] logout request failed, but clearing local state', err);
+    }
     return { status: 'logged_out' };
   }
 }

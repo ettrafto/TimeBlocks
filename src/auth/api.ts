@@ -19,12 +19,16 @@ async function ensureCsrf(): Promise<void> {
   if (!csrfPromise) {
     csrfPromise = http('/api/auth/csrf', { method: 'GET' })
       .then((result) => {
-        console.debug('[Auth][CSRF] token fetched and cookie set')
+        if (import.meta.env.DEV) {
+          console.debug('[Auth][CSRF] token fetched and cookie set')
+        }
         return result
       })
       .catch((err) => {
         csrfPromise = null
-        console.error('[Auth][CSRF] failed to fetch token', err)
+        if (import.meta.env.DEV) {
+          console.error('[Auth][CSRF] failed to fetch token', err)
+        }
         throw err
       })
   }
@@ -90,11 +94,22 @@ export type DevUser = {
   activeSessionCount?: number
 }
 
+/**
+ * Dev-only functions - Only available in development mode
+ * These functions will fail gracefully if called in production
+ */
+
 export async function fetchAllUsers(): Promise<DevUser[]> {
+  if (!import.meta.env.DEV) {
+    throw new Error('Dev endpoints are not available in production')
+  }
   return http('/api/dev/users', { method: 'GET' })
 }
 
 export async function fetchVerificationCode(email: string) {
+  if (!import.meta.env.DEV) {
+    throw new Error('Dev endpoints are not available in production')
+  }
   return http<{ email: string; code: string | null; message?: string }>(
     `/api/dev/verification-code/${encodeURIComponent(email)}`,
     { method: 'GET' }
@@ -102,6 +117,9 @@ export async function fetchVerificationCode(email: string) {
 }
 
 export async function fetchPasswordResetCode(email: string) {
+  if (!import.meta.env.DEV) {
+    throw new Error('Dev endpoints are not available in production')
+  }
   return http<{ email: string; code: string | null; message?: string }>(
     `/api/dev/password-reset-code/${encodeURIComponent(email)}`,
     { method: 'GET' }

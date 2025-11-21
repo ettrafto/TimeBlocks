@@ -63,9 +63,11 @@ import Settings from './pages/Settings.jsx';
 import LoginPage from './auth/pages/LoginPage';
 import SignupPage from './auth/pages/SignupPage';
 import VerifyEmailPage from './auth/pages/VerifyEmailPage';
+import ForgotPasswordPage from './auth/pages/ForgotPasswordPage';
 import ResetPasswordPage from './auth/pages/ResetPasswordPage';
 import { useAuthStore } from './auth/store';
 import { useHydrateAuth } from './auth/hooks';
+import { AUTH_ROUTE_PATHS, isValidReturnUrl } from './auth/constants/routes';
 import { logInfo, logWarn, logError, logDebug, logTBError } from './lib/logging';
 import { isTBError } from './lib/api/normalizeError';
 
@@ -2743,8 +2745,14 @@ function AuthenticatedAppContent() {
     return <BackendTest />;
   }
 
+  // API Testing page - only accessible in development mode
   if (location.pathname === '/api-testing' || location.pathname.startsWith('/api-testing/')) {
-    return <ApiTestingPage />;
+    if (import.meta.env.DEV) {
+      return <ApiTestingPage />;
+    } else {
+      // In production, redirect to home or show 404
+      return <Navigate to="/" replace />;
+    }
   }
 
   // ========================================
@@ -4254,23 +4262,31 @@ function UnauthenticatedShell() {
   const location = useLocation();
   const navigate = useNavigate();
   
-  const authRoutes = ['/login', '/signup', '/verify-email', '/reset-password'];
-  const isAuthRoute = authRoutes.includes(location.pathname);
+  const isAuthRoute = AUTH_ROUTE_PATHS.includes(location.pathname);
   
   // Redirect authenticated users away from auth routes
   React.useEffect(() => {
     const authStatus = useAuthStore.getState().status;
     if (authStatus === 'authenticated' && isAuthRoute) {
-      navigate('/', { replace: true });
+      // Use return URL from location state if available and valid, otherwise default to '/'
+      const returnTo = location.state?.returnTo;
+      const destination = isValidReturnUrl(returnTo) ? returnTo : '/';
+      navigate(destination, { replace: true });
     }
-  }, [isAuthRoute, navigate]);
+  }, [isAuthRoute, navigate, location.state]);
   
-  // If not on an auth route, redirect to login
+  // Redirect unauthenticated users from protected routes to login
   React.useEffect(() => {
-    if (!isAuthRoute) {
-      navigate('/login', { replace: true });
+    const authStatus = useAuthStore.getState().status;
+    if (authStatus === 'unauthenticated' && !isAuthRoute) {
+      // Preserve the current path and query params as return URL
+      const returnUrl = location.pathname + location.search;
+      navigate('/login', { 
+        replace: true,
+        state: { returnTo: returnUrl }
+      });
     }
-  }, [isAuthRoute, navigate]);
+  }, [isAuthRoute, navigate, location.pathname, location.search]);
   
   // Render auth pages - AFTER ALL HOOKS
   if (isAuthRoute) {
@@ -4281,6 +4297,8 @@ function UnauthenticatedShell() {
         return <SignupPage />;
       case '/verify-email':
         return <VerifyEmailPage />;
+      case '/forgot-password':
+        return <ForgotPasswordPage />;
       case '/reset-password':
         return <ResetPasswordPage />;
       default:

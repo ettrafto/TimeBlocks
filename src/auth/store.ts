@@ -5,6 +5,7 @@ import { waitForAuthCookies, hasAuthCookies } from './utils/waitForAuthCookies'
 import { getCorrelationId, checkCookiePresence } from '../lib/api/client'
 import { logInfo, logWarn, logError, logDebug, logTBError } from '../lib/logging'
 import { TBError, isTBError } from '../lib/api/normalizeError'
+import { getGenericErrorMessage, sanitizeErrorMessage } from './utils/errorSanitization'
 
 type AuthActionOptions = {
   debugLabel?: string
@@ -229,7 +230,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ pendingEmail: email.toLowerCase(), status: 'unauthenticated' })
       return response
     } catch (err: any) {
-      set({ status: 'unauthenticated', error: err?.message || 'Signup failed' })
+      const tbError = isTBError(err) ? err : null
+      const userMessage = getGenericErrorMessage(err?.message || 'Signup failed', tbError?.code)
+      set({ status: 'unauthenticated', error: userMessage })
       throw err
     }
   },
@@ -252,17 +255,33 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch (err: any) {
       const error = isTBError(err) ? err : { status: null, code: null, message: err?.message || 'unknown', cid }
       logTBError('Auth][VerifyEmail', error, { cid, email })
-      set({ error: error.message || 'Email verification failed' })
+      // Use generic error message for security-sensitive errors
+      const userMessage = getGenericErrorMessage(error.message || 'Email verification failed', error.code)
+      set({ error: userMessage })
       throw err
     }
   },
   async requestPasswordReset(email, options?: AuthActionOptions) {
     set({ error: null })
-    return authClient.requestPasswordReset({ email }, { debugLabel: options?.debugLabel })
+    try {
+      return await authClient.requestPasswordReset({ email }, { debugLabel: options?.debugLabel })
+    } catch (err: any) {
+      const tbError = isTBError(err) ? err : null
+      const userMessage = getGenericErrorMessage(err?.message || 'Failed to request password reset', tbError?.code)
+      set({ error: userMessage })
+      throw err
+    }
   },
   async resetPassword(email, code, newPassword, options?: AuthActionOptions) {
     set({ error: null })
-    return authClient.resetPassword({ email, code, newPassword }, { debugLabel: options?.debugLabel })
+    try {
+      return await authClient.resetPassword({ email, code, newPassword }, { debugLabel: options?.debugLabel })
+    } catch (err: any) {
+      const tbError = isTBError(err) ? err : null
+      const userMessage = getGenericErrorMessage(err?.message || 'Password reset failed', tbError?.code)
+      set({ error: userMessage })
+      throw err
+    }
   },
   clearError() {
     set({ error: null })

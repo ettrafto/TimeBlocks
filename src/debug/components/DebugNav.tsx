@@ -22,6 +22,9 @@ export default function DebugNav() {
   }, [loadTypes, loadTasks]);
 
   useEffect(() => {
+    // Only enable keyboard shortcuts in development
+    if (!import.meta.env.DEV) return;
+    
     let awaiting = false;
     const onKey = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() === 'g') {
@@ -48,7 +51,9 @@ export default function DebugNav() {
     <nav className="w-full border-b bg-white sticky top-0 z-20">
       <div className="max-w-6xl mx-auto px-3">
         <div className="flex items-center gap-2 py-2 overflow-x-auto">
-          <NavLink to="/api-testing" className={linkCls}>API Testing</NavLink>
+          {import.meta.env.DEV && (
+            <NavLink to="/api-testing" className={linkCls}>API Testing</NavLink>
+          )}
           <NavLink to="/debug/db-admin" className={linkCls}>DB Admin</NavLink>
           <NavLink to="/debug/seed-tools" className={linkCls}>Seed / Reset</NavLink>
           <NavLink to="/debug/logs" className={linkCls}>Logs / Diagnostics</NavLink>
