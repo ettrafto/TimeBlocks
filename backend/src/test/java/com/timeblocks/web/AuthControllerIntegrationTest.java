@@ -467,6 +467,112 @@ class AuthControllerIntegrationTest {
         // [RefreshToken][Rotate] token rotated
     }
 
+    @Test
+    void verifyEmail_withInvalidCode_returns400() throws Exception {
+        // Create user first
+        SignupRequest signup = new SignupRequest("test@example.com", "Password123!", "Test User");
+        mockMvc.perform(post("/api/auth/signup")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(signup)))
+                .andExpect(status().isCreated());
+
+        User user = userRepository.findByEmail("test@example.com").orElseThrow();
+        EmailVerification verification = emailVerificationRepository.findAll().stream()
+                .filter(v -> v.getUser().getId().equals(user.getId()))
+                .findFirst()
+                .orElseThrow();
+        verification.setCode(HashUtils.sha256("111111"));
+        emailVerificationRepository.save(verification);
+
+        // Try with wrong code
+        VerifyEmailRequest verifyRequest = new VerifyEmailRequest("test@example.com", "999999");
+        mockMvc.perform(post("/api/auth/verify-email")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(verifyRequest)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("invalid_code"));
+    }
+
+    @Test
+    void verifyEmail_withExpiredCode_returns400() throws Exception {
+        // Create user first
+        SignupRequest signup = new SignupRequest("expired@example.com", "Password123!", "Test User");
+        mockMvc.perform(post("/api/auth/signup")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(signup)))
+                .andExpect(status().isCreated());
+
+        User user = userRepository.findByEmail("expired@example.com").orElseThrow();
+        EmailVerification verification = emailVerificationRepository.findAll().stream()
+                .filter(v -> v.getUser().getId().equals(user.getId()))
+                .findFirst()
+                .orElseThrow();
+        verification.setCode(HashUtils.sha256("111111"));
+        verification.setExpiresAt(java.time.LocalDateTime.now().minusMinutes(1)); // Expired
+        emailVerificationRepository.save(verification);
+
+        // Try to verify with expired code
+        VerifyEmailRequest verifyRequest = new VerifyEmailRequest("expired@example.com", "111111");
+        mockMvc.perform(post("/api/auth/verify-email")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(verifyRequest)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("code_expired"));
+    }
+
+    @Test
+    void verifyEmail_alreadyVerified_returnsAlreadyVerifiedTrue() throws Exception {
+        // Create and verify user first
+        SignupRequest signup = new SignupRequest("already@example.com", "Password123!", "Test User");
+        mockMvc.perform(post("/api/auth/signup")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(signup)))
+                .andExpect(status().isCreated());
+
+        User user = userRepository.findByEmail("already@example.com").orElseThrow();
+        EmailVerification verification = emailVerificationRepository.findAll().stream()
+                .filter(v -> v.getUser().getId().equals(user.getId()))
+                .findFirst()
+                .orElseThrow();
+        verification.setCode(HashUtils.sha256("111111"));
+        emailVerificationRepository.save(verification);
+
+        // Verify first time
+        VerifyEmailRequest verifyRequest = new VerifyEmailRequest("already@example.com", "111111");
+        mockMvc.perform(post("/api/auth/verify-email")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(verifyRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.verified").value(true))
+                .andExpect(jsonPath("$.alreadyVerified").value(false));
+
+        // Try to verify again
+        mockMvc.perform(post("/api/auth/verify-email")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(verifyRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.verified").value(true))
+                .andExpect(jsonPath("$.alreadyVerified").value(true));
+    }
+
+    @Test
+    void verifyEmail_withNonExistentUser_returns404() throws Exception {
+        VerifyEmailRequest verifyRequest = new VerifyEmailRequest("nonexistent@example.com", "123456");
+        mockMvc.perform(post("/api/auth/verify-email")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(verifyRequest)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("user_not_found"));
+    }
+
     private Cookie findCookie(MvcResult result, String name) {
         return Arrays.stream(result.getResponse().getCookies())
                 .filter(c -> c.getName().equals(name))

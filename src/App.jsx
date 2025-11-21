@@ -4250,7 +4250,7 @@ function AppRoot() {
 // ========================================
 
 function UnauthenticatedShell() {
-  // Minimal hooks for routing
+  // Minimal hooks for routing - ALL HOOKS MUST BE CALLED BEFORE ANY EARLY RETURNS
   const location = useLocation();
   const navigate = useNavigate();
   
@@ -4265,7 +4265,14 @@ function UnauthenticatedShell() {
     }
   }, [isAuthRoute, navigate]);
   
-  // Render auth pages
+  // If not on an auth route, redirect to login
+  React.useEffect(() => {
+    if (!isAuthRoute) {
+      navigate('/login', { replace: true });
+    }
+  }, [isAuthRoute, navigate]);
+  
+  // Render auth pages - AFTER ALL HOOKS
   if (isAuthRoute) {
     switch (location.pathname) {
       case '/login':
@@ -4281,13 +4288,7 @@ function UnauthenticatedShell() {
     }
   }
   
-  // If not on an auth route, redirect to login
-  React.useEffect(() => {
-    if (!isAuthRoute) {
-      navigate('/login', { replace: true });
-    }
-  }, [isAuthRoute, navigate]);
-  
+  // Default fallback (should redirect via useEffect above)
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
       <div className="text-sm text-gray-500">Redirecting to sign in…</div>

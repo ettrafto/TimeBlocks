@@ -94,3 +94,17 @@ export async function fetchAllUsers(): Promise<DevUser[]> {
   return http('/api/dev/users', { method: 'GET' })
 }
 
+export async function fetchVerificationCode(email: string) {
+  return http<{ email: string; code: string | null; message?: string }>(
+    `/api/dev/verification-code/${encodeURIComponent(email)}`,
+    { method: 'GET' }
+  )
+}
+
+export async function fetchPasswordResetCode(email: string) {
+  return http<{ email: string; code: string | null; message?: string }>(
+    `/api/dev/password-reset-code/${encodeURIComponent(email)}`,
+    { method: 'GET' }
+  )
+}
+

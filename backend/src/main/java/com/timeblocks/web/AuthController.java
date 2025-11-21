@@ -89,16 +89,40 @@ public class AuthController {
                                          HttpServletRequest servletRequest) {
         String cid = correlationId(servletRequest);
         log.info("[Auth][VerifyEmail][cid={}] attempt email={} codeLength={}", cid, request.email(), safeLength(request.code()));
+        log.debug("[Auth][VerifyEmail][cid={}] request body email={} code={}", cid, request.email(), 
+                request.code() != null && request.code().length() > 0 ? "***" : "empty");
         try {
             VerificationResult result = authService.verifyEmail(request.email(), request.code());
-            log.info("[Auth][VerifyEmail][cid={}] success email={} alreadyVerified={}", cid, request.email(), result.alreadyVerified());
+            log.info("[Auth][VerifyEmail][cid={}] success email={} alreadyVerified={} verifiedAt={}", 
+                    cid, request.email(), result.alreadyVerified(), result.verifiedAt());
             return ResponseEntity.ok(java.util.Map.of(
                     "verified", true,
                     "alreadyVerified", result.alreadyVerified(),
-                    "verifiedAt", result.verifiedAt()
+                    "verifiedAt", result.verifiedAt().toString()
             ));
+        } catch (IllegalArgumentException ex) {
+            String message = ex.getMessage();
+            log.warn("[Auth][VerifyEmail][cid={}] validation failure email={} reason={}", cid, request.email(), message);
+            // Return structured error response
+            if (message.contains("not found") || message.contains("User not found")) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(java.util.Map.of(
+                        "error", "user_not_found",
+                        "message", "No user found with this email address"
+                ));
+            } else if (message.contains("expired")) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(java.util.Map.of(
+                        "error", "code_expired",
+                        "message", "Verification code has expired. Please request a new code."
+                ));
+            } else if (message.contains("Invalid") || message.contains("No verification code")) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(java.util.Map.of(
+                        "error", "invalid_code",
+                        "message", message
+                ));
+            }
+            throw ex;
         } catch (RuntimeException ex) {
-            log.warn("[Auth][VerifyEmail][cid={}] failure email={} reason={}", cid, request.email(), ex.getMessage());
+            log.error("[Auth][VerifyEmail][cid={}] unexpected error email={} reason={}", cid, request.email(), ex.getMessage(), ex);
             throw ex;
         }
     }

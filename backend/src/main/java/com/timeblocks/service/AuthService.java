@@ -31,6 +31,8 @@ public class AuthService {
     private final RefreshTokenService refreshTokenService;
     private final AuthNotificationService notificationService;
     private final AuthenticationManager authenticationManager;
+    private final com.timeblocks.web.dev.DevVerificationCodeCache devVerificationCodeCache;
+    private final com.timeblocks.web.dev.DevPasswordResetCodeCache devPasswordResetCodeCache;
     private final SecureRandom secureRandom = new SecureRandom();
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AuthService.class);
 
@@ -42,7 +44,9 @@ public class AuthService {
             JwtService jwtService,
             RefreshTokenService refreshTokenService,
             AuthNotificationService notificationService,
-            AuthenticationManager authenticationManager
+            AuthenticationManager authenticationManager,
+            org.springframework.beans.factory.ObjectProvider<com.timeblocks.web.dev.DevVerificationCodeCache> devVerificationCodeCacheProvider,
+            org.springframework.beans.factory.ObjectProvider<com.timeblocks.web.dev.DevPasswordResetCodeCache> devPasswordResetCodeCacheProvider
     ) {
         this.userRepository = userRepository;
         this.emailVerificationRepository = emailVerificationRepository;
@@ -52,6 +56,9 @@ public class AuthService {
         this.refreshTokenService = refreshTokenService;
         this.notificationService = notificationService;
         this.authenticationManager = authenticationManager;
+        // Dev-only caches - will be null in production
+        this.devVerificationCodeCache = devVerificationCodeCacheProvider.getIfAvailable();
+        this.devPasswordResetCodeCache = devPasswordResetCodeCacheProvider.getIfAvailable();
     }
 
     public record LoginResult(User user, String accessToken, RefreshTokenPair refreshTokenPair) { }
@@ -75,14 +82,23 @@ public class AuthService {
     }
 
     private void createEmailVerification(User user) {
+        String cid = com.timeblocks.security.CorrelationIdHolder.get();
         emailVerificationRepository.deleteByUserAndExpiresAtBefore(user, LocalDateTime.now());
         String code = generateCode();
         EmailVerification verification = new EmailVerification();
         verification.setUser(user);
         verification.setCode(HashUtils.sha256(code));
-        verification.setExpiresAt(LocalDateTime.now().plusMinutes(30));
+        LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(30);
+        verification.setExpiresAt(expiresAt);
         emailVerificationRepository.save(verification);
+        log.info("[AuthService][Signup][EmailVerification][cid={}] Generated verification code={} for email={} expiresAt={}", 
+                cid, code, user.getEmail(), expiresAt);
         notificationService.sendEmailVerification(user.getEmail(), code);
+        
+        // Dev-only: Store plaintext code in cache for testing (will be null in production)
+        if (devVerificationCodeCache != null) {
+            devVerificationCodeCache.store(user.getEmail(), code, expiresAt);
+        }
     }
 
     private String generateCode() {
@@ -92,22 +108,52 @@ public class AuthService {
 
     @Transactional
     public VerificationResult verifyEmail(String email, String code) {
-        User user = userRepository.findByEmail(email.toLowerCase(Locale.ROOT))
-                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+        String normalizedEmail = email.toLowerCase(Locale.ROOT);
+        String cid = com.timeblocks.security.CorrelationIdHolder.get();
+        log.debug("[AuthService][VerifyEmail][cid={}] normalizedEmail={} codeLength={}", cid, normalizedEmail, code != null ? code.length() : 0);
+        
+        User user = userRepository.findByEmail(normalizedEmail)
+                .orElseThrow(() -> {
+                    log.warn("[AuthService][VerifyEmail][cid={}] user not found email={}", cid, normalizedEmail);
+                    return new IllegalArgumentException("User not found");
+                });
+        
         if (user.getEmailVerifiedAt() != null) {
+            log.info("[AuthService][VerifyEmail][cid={}] user already verified email={} verifiedAt={}", 
+                    cid, normalizedEmail, user.getEmailVerifiedAt());
             return new VerificationResult(true, user.getEmailVerifiedAt());
         }
+        
         String hashed = HashUtils.sha256(code);
+        log.debug("[AuthService][VerifyEmail][cid={}] looking up verification code hash={}", cid, hashed.substring(0, Math.min(8, hashed.length())) + "...");
+        
         EmailVerification verification = emailVerificationRepository
                 .findFirstByUserAndCodeAndUsedAtIsNull(user, hashed)
-                .orElseThrow(() -> new IllegalArgumentException("Invalid verification code"));
+                .orElseThrow(() -> {
+                    // Check if there are any verifications for this user to provide better error message
+                    long count = emailVerificationRepository.findAll().stream()
+                            .filter(v -> v.getUser().getId().equals(user.getId()))
+                            .count();
+                    if (count == 0) {
+                        log.warn("[AuthService][VerifyEmail][cid={}] no verification codes found for user email={}", cid, normalizedEmail);
+                        return new IllegalArgumentException("No verification code found for this email. Please request a new code.");
+                    } else {
+                        log.warn("[AuthService][VerifyEmail][cid={}] verification code not found or already used email={}", cid, normalizedEmail);
+                        return new IllegalArgumentException("Invalid verification code");
+                    }
+                });
+        
         if (verification.getExpiresAt().isBefore(LocalDateTime.now())) {
+            log.warn("[AuthService][VerifyEmail][cid={}] verification code expired email={} expiresAt={}", 
+                    cid, normalizedEmail, verification.getExpiresAt());
             throw new IllegalArgumentException("Verification code expired");
         }
+        
         verification.setUsedAt(LocalDateTime.now());
         emailVerificationRepository.save(verification);
         user.setEmailVerifiedAt(LocalDateTime.now());
         userRepository.save(user);
+        log.info("[AuthService][VerifyEmail][cid={}] email verified successfully email={}", cid, normalizedEmail);
         return new VerificationResult(false, user.getEmailVerifiedAt());
     }
 
@@ -154,9 +200,15 @@ public class AuthService {
             PasswordReset reset = new PasswordReset();
             reset.setUser(user);
             reset.setCode(HashUtils.sha256(code));
-            reset.setExpiresAt(LocalDateTime.now().plusMinutes(30));
+            LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(30);
+            reset.setExpiresAt(expiresAt);
             passwordResetRepository.save(reset);
             notificationService.sendPasswordReset(user.getEmail(), code);
+            
+            // Dev-only: Store plaintext code in cache for testing (will be null in production)
+            if (devPasswordResetCodeCache != null) {
+                devPasswordResetCodeCache.store(user.getEmail(), code, expiresAt);
+            }
         });
         // Always return success to prevent enumeration.
     }

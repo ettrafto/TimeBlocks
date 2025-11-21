@@ -9,6 +9,7 @@ import { subscribeHttpEvents } from "../lib/api/httpEvents";
 import * as authClient from "../auth/authClient";
 import { useAuthStore } from "../auth/store";
 import UsersMonitorPanel from "../auth-debug/UsersMonitorPanel";
+import { fetchVerificationCode, fetchPasswordResetCode } from "../auth/api";
 
 // ApiTestingPage is a live diagnostics harness for auth flows. It runs the same
 // store/client code paths as the real app, logs sanitized payloads + responses,
@@ -67,6 +68,10 @@ export default function ApiTestingPage() {
   const [resetCode, setResetCode] = useState("");
   const [newPassword, setNewPassword] = useState("NewPassword123!");
   const [accountLog, setAccountLog] = useState([]);
+  const [verificationCodeDisplay, setVerificationCodeDisplay] = useState(null);
+  const [verificationCodeError, setVerificationCodeError] = useState(null);
+  const [passwordResetCodeDisplay, setPasswordResetCodeDisplay] = useState(null);
+  const [passwordResetCodeError, setPasswordResetCodeError] = useState(null);
   const pendingHttpResolvers = useRef(new Map());
 
   useEffect(() => {
@@ -144,9 +149,11 @@ export default function ApiTestingPage() {
         const result = await executor(actionId);
         const httpEvent = await httpEventPromise;
         const durationMs = Date.now() - startedAt;
+        const responseBody = httpEvent?.responseBody ?? result ?? null;
+        
         updateAccountLogEntry(actionId, () => ({
           status: "success",
-          response: sanitizePayload(httpEvent?.responseBody ?? result ?? null),
+          response: sanitizePayload(responseBody),
           error: null,
           http: httpEvent
             ? {
@@ -161,7 +168,7 @@ export default function ApiTestingPage() {
         }));
         console.info("[ApiTesting] response", {
           status: httpEvent?.status ?? "n/a",
-          body: httpEvent?.responseBody ?? result ?? null,
+          body: responseBody,
           cid: httpEvent?.cid ?? "n/a",
         });
         console.groupEnd();
@@ -210,12 +217,54 @@ export default function ApiTestingPage() {
       label: "Signup",
       client: "authStore.signup",
       requestPayload: { email: authEmail, password: authPassword, name: signupName },
-      executor: (actionId) =>
-        authSignup(authEmail, authPassword, signupName, { debugLabel: actionId }),
+      executor: async (actionId) => {
+        const result = await authSignup(authEmail, authPassword, signupName, { debugLabel: actionId });
+        // After successful signup, try to fetch the verification code
+        setVerificationCodeError(null);
+        try {
+          const codeResponse = await fetchVerificationCode(authEmail);
+          if (codeResponse.code) {
+            setVerificationCodeDisplay(codeResponse.code);
+            setVerifyCode(codeResponse.code); // Auto-fill the verification code field
+          } else {
+            setVerificationCodeDisplay(null);
+            setVerificationCodeError(codeResponse.message || "No verification code found. Make sure you've recently signed up.");
+          }
+        } catch (err) {
+          setVerificationCodeDisplay(null);
+          setVerificationCodeError(err?.message || "Failed to fetch verification code");
+        }
+        return result;
+      },
     });
   };
 
+  const handleFetchVerificationCode = async () => {
+    if (!authEmail) {
+      setVerificationCodeError("Please enter an email address first");
+      return;
+    }
+    setVerificationCodeError(null);
+    setVerificationCodeDisplay(null);
+    try {
+      const response = await fetchVerificationCode(authEmail);
+      if (response.code) {
+        setVerificationCodeDisplay(response.code);
+        setVerifyCode(response.code); // Auto-fill the verification code field
+      } else {
+        setVerificationCodeError(response.message || "No verification code found. Make sure you've recently signed up.");
+      }
+    } catch (err) {
+      setVerificationCodeError(err?.message || "Failed to fetch verification code");
+    }
+  };
+
   const handleVerifyEmail = async () => {
+    if (!verifyCode || verifyCode.trim().length === 0) {
+      alert("Please enter a verification code.\n\nAfter signup, check the browser console for the verification code (it will be displayed in large, colored text).\n\n⚠️ This console display is temporary and will be removed before production.");
+      return;
+    }
+    console.log("[ApiTesting][VerifyEmail] payload", { email: authEmail, codeLength: verifyCode.length });
     await runAccountAction({
       label: "Verify Email",
       client: "authStore.verifyEmail",
@@ -266,8 +315,46 @@ export default function ApiTestingPage() {
       label: "Request Password Reset",
       client: "authStore.requestPasswordReset",
       requestPayload: { email: authEmail },
-      executor: (actionId) => authRequestPasswordReset(authEmail, { debugLabel: actionId }),
+      executor: async (actionId) => {
+        const result = await authRequestPasswordReset(authEmail, { debugLabel: actionId });
+        // After successful password reset request, try to fetch the reset code
+        setPasswordResetCodeError(null);
+        try {
+          const codeResponse = await fetchPasswordResetCode(authEmail);
+          if (codeResponse.code) {
+            setPasswordResetCodeDisplay(codeResponse.code);
+            setResetCode(codeResponse.code); // Auto-fill the password reset code field
+          } else {
+            setPasswordResetCodeDisplay(null);
+            setPasswordResetCodeError(codeResponse.message || "No password reset code found. Make sure you've recently requested a password reset.");
+          }
+        } catch (err) {
+          setPasswordResetCodeDisplay(null);
+          setPasswordResetCodeError(err?.message || "Failed to fetch password reset code");
+        }
+        return result;
+      },
     });
+  };
+
+  const handleFetchPasswordResetCode = async () => {
+    if (!authEmail) {
+      setPasswordResetCodeError("Please enter an email address first");
+      return;
+    }
+    setPasswordResetCodeError(null);
+    setPasswordResetCodeDisplay(null);
+    try {
+      const response = await fetchPasswordResetCode(authEmail);
+      if (response.code) {
+        setPasswordResetCodeDisplay(response.code);
+        setResetCode(response.code); // Auto-fill the password reset code field
+      } else {
+        setPasswordResetCodeError(response.message || "No password reset code found. Make sure you've recently requested a password reset.");
+      }
+    } catch (err) {
+      setPasswordResetCodeError(err?.message || "Failed to fetch password reset code");
+    }
   };
 
   const handleResetPassword = async () => {
@@ -456,19 +543,55 @@ export default function ApiTestingPage() {
                 placeholder="Jane Doe"
               />
               <label className="block text-xs font-semibold text-gray-600 pt-2">Verification code</label>
-              <input
-                className="w-full border rounded-md px-2 py-1 text-sm"
-                value={verifyCode}
-                onChange={(e) => setVerifyCode(e.target.value)}
-                placeholder="123456"
-              />
+              <div className="space-y-1">
+                <input
+                  className="w-full border rounded-md px-2 py-1 text-sm"
+                  value={verifyCode}
+                  onChange={(e) => setVerifyCode(e.target.value)}
+                  placeholder="123456"
+                />
+                <button
+                  onClick={handleFetchVerificationCode}
+                  className="w-full px-2 py-1 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 text-xs"
+                >
+                  Get Verification Code
+                </button>
+                {verificationCodeDisplay && (
+                  <div className="text-xs p-2 bg-green-50 border border-green-200 rounded-md">
+                    <div className="font-semibold text-green-800">Code: {verificationCodeDisplay}</div>
+                  </div>
+                )}
+                {verificationCodeError && (
+                  <div className="text-xs p-2 bg-red-50 border border-red-200 rounded-md text-red-700">
+                    {verificationCodeError}
+                  </div>
+                )}
+              </div>
               <label className="block text-xs font-semibold text-gray-600 pt-2">Password reset code</label>
-              <input
-                className="w-full border rounded-md px-2 py-1 text-sm"
-                value={resetCode}
-                onChange={(e) => setResetCode(e.target.value)}
-                placeholder="654321"
-              />
+              <div className="space-y-1">
+                <input
+                  className="w-full border rounded-md px-2 py-1 text-sm"
+                  value={resetCode}
+                  onChange={(e) => setResetCode(e.target.value)}
+                  placeholder="654321"
+                />
+                <button
+                  onClick={handleFetchPasswordResetCode}
+                  className="w-full px-2 py-1 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 text-xs"
+                >
+                  Get Password Reset Code
+                </button>
+                {passwordResetCodeDisplay && (
+                  <div className="text-xs p-2 bg-green-50 border border-green-200 rounded-md">
+                    <div className="font-semibold text-green-800">Code: {passwordResetCodeDisplay}</div>
+                  </div>
+                )}
+                {passwordResetCodeError && (
+                  <div className="text-xs p-2 bg-red-50 border border-red-200 rounded-md text-red-700">
+                    {passwordResetCodeError}
+                  </div>
+                )}
+              </div>
               <label className="block text-xs font-semibold text-gray-600 pt-2">New password</label>
               <input
                 className="w-full border rounded-md px-2 py-1 text-sm"

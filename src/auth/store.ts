@@ -234,12 +234,27 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
   async verifyEmail(email, code, options?: AuthActionOptions) {
+    const cid = getCorrelationId()
     set({ error: null })
-    const res = await authClient.verifyEmail({ email, code }, { debugLabel: options?.debugLabel })
-    if (get().pendingEmail === email) {
-      set({ pendingEmail: null })
+    logInfo('Auth][VerifyEmail', 'entering verifyEmail', { cid, email })
+    try {
+      const res = await authClient.verifyEmail({ email, code }, { debugLabel: options?.debugLabel })
+      logInfo('Auth][VerifyEmail', 'email verified successfully', { 
+        cid,
+        email, 
+        verified: res?.verified, 
+        alreadyVerified: res?.alreadyVerified 
+      })
+      if (get().pendingEmail === email) {
+        set({ pendingEmail: null })
+      }
+      return res
+    } catch (err: any) {
+      const error = isTBError(err) ? err : { status: null, code: null, message: err?.message || 'unknown', cid }
+      logTBError('Auth][VerifyEmail', error, { cid, email })
+      set({ error: error.message || 'Email verification failed' })
+      throw err
     }
-    return res
   },
   async requestPasswordReset(email, options?: AuthActionOptions) {
     set({ error: null })

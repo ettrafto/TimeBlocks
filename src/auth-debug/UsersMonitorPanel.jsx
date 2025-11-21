@@ -64,43 +64,43 @@ export default function UsersMonitorPanel() {
       {users.length === 0 ? (
         <div className="text-sm text-gray-600">No users loaded. Click refresh to fetch the latest data.</div>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm text-left border">
-            <thead className="bg-gray-50 text-xs uppercase text-gray-500">
+        <div className="overflow-x-auto bg-gray-50 border rounded-md p-3">
+          <table className="min-w-full text-sm text-left">
+            <thead className="text-xs uppercase text-gray-500">
               <tr>
-                <th className="px-3 py-2 border">Email</th>
-                <th className="px-3 py-2 border">Name</th>
-                <th className="px-3 py-2 border">Role</th>
-                <th className="px-3 py-2 border">Verified</th>
-                <th className="px-3 py-2 border">Active</th>
-                <th className="px-3 py-2 border">Authenticated</th>
-                <th className="px-3 py-2 border">Recent Login</th>
-                <th className="px-3 py-2 border">Created</th>
-                <th className="px-3 py-2 border">Last Login</th>
-                <th className="px-3 py-2 border">Updated</th>
+                <th className="px-3 py-2 border-b border-gray-200">Email</th>
+                <th className="px-3 py-2 border-b border-gray-200">Name</th>
+                <th className="px-3 py-2 border-b border-gray-200">Role</th>
+                <th className="px-3 py-2 border-b border-gray-200">Verified</th>
+                <th className="px-3 py-2 border-b border-gray-200">Active</th>
+                <th className="px-3 py-2 border-b border-gray-200">Authenticated</th>
+                <th className="px-3 py-2 border-b border-gray-200">Recent Login</th>
+                <th className="px-3 py-2 border-b border-gray-200">Created</th>
+                <th className="px-3 py-2 border-b border-gray-200">Last Login</th>
+                <th className="px-3 py-2 border-b border-gray-200">Updated</th>
               </tr>
             </thead>
             <tbody>
               {users.map((user) => (
-                <tr key={user.id} className="odd:bg-white even:bg-gray-50">
-                  <td className="px-3 py-2 border font-mono text-xs">{user.email}</td>
-                  <td className="px-3 py-2 border">{user.name || "—"}</td>
-                  <td className="px-3 py-2 border">{user.role || "—"}</td>
-                  <td className="px-3 py-2 border text-center">
+                <tr key={user.id} className="border-b border-gray-200 hover:bg-gray-100">
+                  <td className="px-3 py-2 font-mono text-xs">{user.email}</td>
+                  <td className="px-3 py-2">{user.name || "—"}</td>
+                  <td className="px-3 py-2">{user.role || "—"}</td>
+                  <td className="px-3 py-2 text-center">
                     <BoolBadge value={user.verified} />
                   </td>
-                  <td className="px-3 py-2 border text-center">
+                  <td className="px-3 py-2 text-center">
                     <BoolBadge value={user.active} />
                   </td>
-                  <td className="px-3 py-2 border text-center">
+                  <td className="px-3 py-2 text-center">
                     <BoolBadge value={user.authenticated} />
                   </td>
-                  <td className="px-3 py-2 border text-center">
+                  <td className="px-3 py-2 text-center">
                     <BoolBadge value={user.loggedInRecently} />
                   </td>
-                  <td className="px-3 py-2 border">{formatDate(user.createdAt)}</td>
-                  <td className="px-3 py-2 border">{formatDate(user.lastLoginAt)}</td>
-                  <td className="px-3 py-2 border">{formatDate(user.updatedAt)}</td>
+                  <td className="px-3 py-2">{formatDate(user.createdAt)}</td>
+                  <td className="px-3 py-2">{formatDate(user.lastLoginAt)}</td>
+                  <td className="px-3 py-2">{formatDate(user.updatedAt)}</td>
                 </tr>
               ))}
             </tbody>
