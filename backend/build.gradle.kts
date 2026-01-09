@@ -72,3 +72,14 @@ tasks.register<JavaExec>("seedAdmin") {
     environment("SPRING_PROFILES_ACTIVE", "dev")
 }
 
+tasks.register<JavaExec>("seedExampleData") {
+    group = "dev"
+    description = "Seeds example data (event types, tasks, events) for the admin account"
+    mainClass.set("com.timeblocks.cli.SeedExampleDataCli")
+    classpath = sourceSets["main"].runtimeClasspath
+    javaLauncher.set(javaToolchains.launcherFor {
+        languageVersion.set(JavaLanguageVersion.of(21))
+    })
+    environment("SPRING_PROFILES_ACTIVE", "dev")
+}
+
